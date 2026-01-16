@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Header
 from app.auth.dependencies import get_current_user
 from app.auth.firebase import get_firebase_auth
 from app.models.otp import OTPRequest, OTPVerifyRequest, OTPResponse, OTPVerifyResponse
-from app.services.otp_service import generate_otp, store_otp, verify_otp, send_otp_email, normalize_email, get_existing_otp
+from app.services.otp_service import generate_otp, store_otp, verify_otp, send_otp_email, normalize_email, get_existing_otp, mask_otp
 
 router = APIRouter(
     prefix="/auth",
@@ -121,18 +121,21 @@ async def generate_otp_code(
                 if existing_code:
                     is_new_otp = False
                     code_to_send = str(existing_code).strip()
-                    print(f"[OTP] Reusing existing OTP for {normalized_email}")
+                    print(f"[OTP] Reusing existing OTP for {normalized_email} (code: {mask_otp(code_to_send)})")
+                    # IMPORTANT: Don't generate or store new OTP - just return the existing one
+                    # This prevents overwriting the OTP the user is trying to verify
                 else:
                     # OTP exists but code missing - generate new one
                     print(f"[OTP] Existing OTP found but code missing - generating new OTP")
+                    is_new_otp = True
         
-        # Generate new OTP if needed
+        # Generate new OTP ONLY if we don't have an existing one to reuse
         if is_new_otp:
             code = generate_otp()
-            # Store OTP in Firestore
+            # Store OTP in Firestore (this will overwrite any existing OTP)
             store_otp(request.email, request.uid, code, is_resend=request.resend)
-            code_to_send = code
-            print(f"[OTP] Generated new OTP for {normalized_email}")
+            code_to_send = str(code).strip()  # Ensure it's a string
+            print(f"[OTP] Generated new OTP for {normalized_email} (code: {mask_otp(code_to_send)})")
         
         # Send OTP via email
         if code_to_send:
@@ -210,6 +213,8 @@ async def verify_otp_code(
         
         is_valid, message = verify_otp(request.email, request.uid, request.code)
         
+        print(f"[OTP API] Verification result: is_valid={is_valid}, message={message}")
+        
         if is_valid:
             return OTPVerifyResponse(
                 success=True,
@@ -222,6 +227,10 @@ async def verify_otp_code(
                 message="Invalid or expired verification code"
             )
     except Exception as e:
+        # Log the actual error for debugging
+        print(f"[OTP API] Exception during verification: {type(e).__name__}: {str(e)}")
+        import traceback
+        print(f"[OTP API] Traceback: {traceback.format_exc()}")
         return OTPVerifyResponse(
             success=False,
             message="Unable to verify code. Please try again."
