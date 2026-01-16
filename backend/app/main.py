@@ -2,6 +2,12 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.auth import router as auth_router
+from app.api.me import router as me_router
+from app.api.sessions import router as sessions_router
+from app.api.voice import router as voice_router
+from app.api.reports import router as reports_router
+from app.api.rewards import router as rewards_router
+from app.api.privacy import router as privacy_router
 
 app = FastAPI(
     title="Gossip Detector API",
@@ -20,6 +26,12 @@ app.add_middleware(
 
 # Register API routers
 app.include_router(auth_router)
+app.include_router(me_router, prefix="/api")
+app.include_router(sessions_router, prefix="/api")
+app.include_router(voice_router, prefix="/api")
+app.include_router(reports_router, prefix="/api")
+app.include_router(rewards_router, prefix="/api")
+app.include_router(privacy_router, prefix="/api")
 
 
 @app.get(
