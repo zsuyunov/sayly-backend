@@ -6,7 +6,7 @@ import hashlib
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from typing import Optional, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import firebase_admin
 from firebase_admin import firestore
 from app.auth.firebase import get_firebase_auth
@@ -71,7 +71,12 @@ def get_existing_otp(email: str, uid: str) -> Optional[dict]:
     expires_at = otp_data.get('expires_at')
     if expires_at:
         if isinstance(expires_at, datetime):
-            if datetime.utcnow() > expires_at:
+            # Use timezone-aware comparison
+            now = datetime.now(timezone.utc)
+            if expires_at.tzinfo is None:
+                # If timezone-naive, assume it's UTC
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            if now > expires_at:
                 print(f"[OTP] Existing OTP found but expired - generating new OTP")
                 return None  # Expired
         else:
@@ -104,7 +109,8 @@ def store_otp(email: str, uid: str, code: str, is_resend: bool = False) -> None:
     code = str(code).strip()
     
     # Generate new OTP (always store when called - reuse logic is handled in API layer)
-    expires_at = datetime.utcnow() + timedelta(minutes=OTP_EXPIRATION_MINUTES)
+    # Use timezone-aware datetime for consistency with Firestore
+    expires_at = datetime.now(timezone.utc) + timedelta(minutes=OTP_EXPIRATION_MINUTES)
     code_hash = hash_otp(code)
     masked_code = mask_otp(code)
     
@@ -179,17 +185,41 @@ def verify_otp(email: str, uid: str, code: str) -> Tuple[bool, str]:
     
     # Check expiration
     expires_at = otp_data.get('expires_at')
+    print(f"[OTP] Checking expiration...")
     if expires_at:
+        # Get current time as timezone-aware UTC datetime
+        now = datetime.now(timezone.utc)
+        
         if isinstance(expires_at, datetime):
-            if datetime.utcnow() > expires_at:
-                print(f"[OTP] Verification failed: OTP expired for {normalized_email}")
+            # If expires_at is a datetime, ensure it's timezone-aware for comparison
+            if expires_at.tzinfo is None:
+                # If timezone-naive, assume it's UTC
+                expires_at = expires_at.replace(tzinfo=timezone.utc)
+            
+            print(f"[OTP]   Current time (UTC): {now}")
+            print(f"[OTP]   Expires at: {expires_at}")
+            
+            if now > expires_at:
+                print(f"[OTP] ❌ VERIFICATION FAILED: OTP expired")
+                print(f"[OTP] ========================================")
                 return False, "Verification code has expired"
+            else:
+                print(f"[OTP] Expiration check passed (expires at: {expires_at})")
         else:
             # Handle Firestore Timestamp
             expires_timestamp = expires_at.timestamp()
-            if time.time() > expires_timestamp:
-                print(f"[OTP] Verification failed: OTP expired for {normalized_email}")
+            current_timestamp = time.time()
+            print(f"[OTP]   Current timestamp: {current_timestamp}")
+            print(f"[OTP]   Expires timestamp: {expires_timestamp}")
+            
+            if current_timestamp > expires_timestamp:
+                print(f"[OTP] ❌ VERIFICATION FAILED: OTP expired (timestamp)")
+                print(f"[OTP] ========================================")
                 return False, "Verification code has expired"
+            else:
+                print(f"[OTP] Expiration check passed (timestamp)")
+    else:
+        print(f"[OTP] No expiration set (unlimited validity)")
     
     # Verify code - check both plain code (preferred) and hash (backup)
     stored_code_hash = otp_data.get('code_hash')
@@ -379,7 +409,7 @@ Sayly Team
 def cleanup_expired_otps() -> None:
     """Clean up expired OTP codes from Firestore."""
     db = get_firestore_db()
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     
     # Query for expired OTPs
     expired_otps = db.collection('otp_codes').where('expires_at', '<', now).stream()
