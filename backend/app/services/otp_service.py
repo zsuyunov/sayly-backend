@@ -285,6 +285,21 @@ def verify_otp(email: str, uid: str, code: str) -> Tuple[bool, str]:
     # Delete OTP record on successful verification (removes both hash and temporary code)
     doc_ref.delete()
     print(f"[OTP] ✅ VERIFICATION SUCCESSFUL for {normalized_email}. OTP record deleted.")
+    
+    # Update Firestore user document to mark email as verified
+    # Backend has admin privileges, so this will work even if user is not authenticated
+    try:
+        user_doc_ref = db.collection('users').document(uid)
+        user_doc_ref.set({
+            'emailVerified': True,
+            'emailVerifiedAt': firestore.SERVER_TIMESTAMP,
+        }, merge=True)
+        print(f"[OTP] Updated Firestore: emailVerified=true for user {uid}")
+    except Exception as e:
+        # Log but don't fail - OTP verification succeeded
+        print(f"[OTP] Warning: Could not update Firestore user document: {e}")
+        # This is non-critical - the OTP was verified successfully
+    
     print(f"[OTP] ========================================")
     
     return True, "Email verified successfully"
