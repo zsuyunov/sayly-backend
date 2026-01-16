@@ -7,6 +7,7 @@ class OTPRequest(BaseModel):
     """Request model for generating OTP."""
     email: EmailStr = Field(..., description="Email address to send OTP to")
     uid: str = Field(..., description="Firebase user UID")
+    resend: bool = Field(default=False, description="Whether this is an explicit resend request")
 
 
 class OTPVerifyRequest(BaseModel):

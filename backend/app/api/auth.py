@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Header
 from app.auth.dependencies import get_current_user
 from app.auth.firebase import get_firebase_auth
 from app.models.otp import OTPRequest, OTPVerifyRequest, OTPResponse, OTPVerifyResponse
-from app.services.otp_service import generate_otp, store_otp, verify_otp, send_otp_email
+from app.services.otp_service import generate_otp, store_otp, verify_otp, send_otp_email, normalize_email
 
 router = APIRouter(
     prefix="/auth",
@@ -108,22 +108,39 @@ async def generate_otp_code(
         # Generate 4-digit OTP
         code = generate_otp()
         
-        # Store OTP in Firestore with expiration
-        store_otp(request.email, request.uid, code)
+        # Store OTP in Firestore with expiration (is_resend flag controls whether to reuse existing)
+        is_new_otp, code_to_send = store_otp(request.email, request.uid, code, is_resend=request.resend)
         
-        # Send OTP via email
-        email_sent = send_otp_email(request.email, code)
+        # Normalize email
+        normalized_email = normalize_email(request.email)
         
-        if email_sent:
-            return OTPResponse(
-                success=True,
-                message="Verification code has been sent to your email"
-            )
+        # Send OTP via email if we have a code to send
+        if code_to_send:
+            email_sent = send_otp_email(normalized_email, code_to_send)
+            
+            if email_sent:
+                if is_new_otp:
+                    return OTPResponse(
+                        success=True,
+                        message="Verification code has been sent to your email"
+                    )
+                else:
+                    # Reusing existing OTP but resending email
+                    return OTPResponse(
+                        success=True,
+                        message="Verification code has been resent to your email"
+                    )
+            else:
+                # Still return success as code is stored (email sending might fail but code is available)
+                return OTPResponse(
+                    success=True,
+                    message="Verification code generated. Please check your email."
+                )
         else:
-            # Still return success as code is stored (email sending might fail but code is available)
+            # Reusing existing OTP but code not available for resend (shouldn't happen with current implementation)
             return OTPResponse(
                 success=True,
-                message="Verification code generated. Please check your email."
+                message="A verification code was already sent to your email. Please check your inbox."
             )
     except Exception as e:
         # Generic error message to avoid email enumeration
