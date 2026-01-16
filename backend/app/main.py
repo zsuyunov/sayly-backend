@@ -39,3 +39,6 @@ def health_check():
         "service": "Gossip Detector API",
     }
 
+@app.get("/")
+def root():
+    return {"status": "ok", "service": "Sayly backend"}
