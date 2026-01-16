@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Header
 from app.auth.dependencies import get_current_user
 from app.auth.firebase import get_firebase_auth
 from app.models.otp import OTPRequest, OTPVerifyRequest, OTPResponse, OTPVerifyResponse
-from app.services.otp_service import generate_otp, store_otp, verify_otp, send_otp_email, normalize_email
+from app.services.otp_service import generate_otp, store_otp, verify_otp, send_otp_email, normalize_email, get_existing_otp
 
 router = APIRouter(
     prefix="/auth",
@@ -105,16 +105,36 @@ async def generate_otp_code(
                 message="Unable to send verification code. Please try again."
             )
         
-        # Generate 4-digit OTP
-        code = generate_otp()
-        
-        # Store OTP in Firestore with expiration (is_resend flag controls whether to reuse existing)
-        is_new_otp, code_to_send = store_otp(request.email, request.uid, code, is_resend=request.resend)
-        
         # Normalize email
         normalized_email = normalize_email(request.email)
         
-        # Send OTP via email if we have a code to send
+        # Check if we should reuse existing OTP (only if not explicit resend)
+        is_new_otp = True
+        code_to_send = None
+        
+        if not request.resend:
+            # Check for existing unexpired OTP
+            existing_otp = get_existing_otp(normalized_email, request.uid)
+            if existing_otp:
+                # Reuse existing OTP
+                existing_code = existing_otp.get('code')
+                if existing_code:
+                    is_new_otp = False
+                    code_to_send = str(existing_code).strip()
+                    print(f"[OTP] Reusing existing OTP for {normalized_email}")
+                else:
+                    # OTP exists but code missing - generate new one
+                    print(f"[OTP] Existing OTP found but code missing - generating new OTP")
+        
+        # Generate new OTP if needed
+        if is_new_otp:
+            code = generate_otp()
+            # Store OTP in Firestore
+            store_otp(request.email, request.uid, code, is_resend=request.resend)
+            code_to_send = code
+            print(f"[OTP] Generated new OTP for {normalized_email}")
+        
+        # Send OTP via email
         if code_to_send:
             email_sent = send_otp_email(normalized_email, code_to_send)
             
@@ -131,16 +151,16 @@ async def generate_otp_code(
                         message="Verification code has been resent to your email"
                     )
             else:
-                # Still return success as code is stored (email sending might fail but code is available)
+                # Still return success as code is stored
                 return OTPResponse(
                     success=True,
                     message="Verification code generated. Please check your email."
                 )
         else:
-            # Reusing existing OTP but code not available for resend (shouldn't happen with current implementation)
+            # This shouldn't happen, but handle gracefully
             return OTPResponse(
-                success=True,
-                message="A verification code was already sent to your email. Please check your inbox."
+                success=False,
+                message="Unable to generate verification code. Please try again."
             )
     except Exception as e:
         # Generic error message to avoid email enumeration

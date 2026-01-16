@@ -50,8 +50,8 @@ def generate_otp() -> str:
     """Generate a 4-digit numeric OTP code."""
     return str(random.randint(1000, 9999))
 
-def get_existing_otp(email: str) -> Optional[dict]:
-    """Get existing OTP for email if it exists and is not expired."""
+def get_existing_otp(email: str, uid: str) -> Optional[dict]:
+    """Get existing OTP for email if it exists, is not expired, and UID matches."""
     db = get_firestore_db()
     normalized_email = normalize_email(email)
     doc_ref = db.collection('otp_codes').document(normalized_email)
@@ -62,55 +62,45 @@ def get_existing_otp(email: str) -> Optional[dict]:
     
     otp_data = doc.to_dict()
     
+    # Check if UID matches (critical for security)
+    if otp_data.get('uid') != uid:
+        print(f"[OTP] Existing OTP found but UID mismatch - generating new OTP")
+        return None  # UID doesn't match, need new OTP
+    
     # Check if expired
     expires_at = otp_data.get('expires_at')
     if expires_at:
         if isinstance(expires_at, datetime):
             if datetime.utcnow() > expires_at:
+                print(f"[OTP] Existing OTP found but expired - generating new OTP")
                 return None  # Expired
         else:
             # Handle Firestore Timestamp
             expires_timestamp = expires_at.timestamp()
             if time.time() > expires_timestamp:
+                print(f"[OTP] Existing OTP found but expired - generating new OTP")
                 return None  # Expired
     
     # Check if already verified
     if otp_data.get('verified', False):
+        print(f"[OTP] Existing OTP found but already verified - generating new OTP")
         return None  # Already verified
     
     return otp_data
 
-def store_otp(email: str, uid: str, code: str, is_resend: bool = False) -> Tuple[bool, Optional[str]]:
+def store_otp(email: str, uid: str, code: str, is_resend: bool = False) -> None:
     """Store OTP code in Firestore with expiration.
     
     Args:
         email: Email address (will be normalized)
         uid: Firebase user UID
         code: OTP code (will be hashed for storage, but stored temporarily for resend)
-        is_resend: Whether this is an explicit resend request
-    
-    Returns:
-        tuple: (is_new_otp, code_to_send)
-        - is_new_otp: True if new OTP was created, False if existing was reused
-        - code_to_send: The code to send via email (existing code if reusing, new code if creating)
+        is_resend: Whether this is an explicit resend request (if True, always stores new OTP)
     """
     db = get_firestore_db()
     normalized_email = normalize_email(email)
     
-    # Check for existing unexpired OTP
-    if not is_resend:
-        existing_otp = get_existing_otp(normalized_email)
-        if existing_otp:
-            # Reuse existing OTP - retrieve the code if available
-            # Try to get code from existing_otp (might be stored temporarily)
-            existing_code = existing_otp.get('code')  # Temporary storage for resend capability
-            masked_code = mask_otp(existing_code) if existing_code else "****"
-            print(f"[OTP] Reusing existing unexpired OTP for {normalized_email} (masked: {masked_code})")
-            print(f"[OTP] OTP expires at: {existing_otp.get('expires_at')}")
-            # Return existing code to resend (if available) or None if not stored
-            return (False, existing_code)
-    
-    # Generate new OTP (or use provided code if resend)
+    # Generate new OTP (always store when called - reuse logic is handled in API layer)
     expires_at = datetime.utcnow() + timedelta(minutes=OTP_EXPIRATION_MINUTES)
     code_hash = hash_otp(code)
     masked_code = mask_otp(code)
@@ -130,11 +120,9 @@ def store_otp(email: str, uid: str, code: str, is_resend: bool = False) -> Tuple
     doc_ref.set(otp_data)
     
     # Debug logs (never log raw OTP)
-    print(f"[OTP] OTP created for {normalized_email} (masked: {masked_code})")
+    print(f"[OTP] OTP stored for {normalized_email} (masked: {masked_code})")
     print(f"[OTP] OTP expires at: {expires_at}")
-    print(f"[OTP] UID: {uid}")
-    
-    return (True, code)  # Return code to send via email
+    print(f"[OTP] UID: {uid}, is_resend: {is_resend}")
 
 def verify_otp(email: str, uid: str, code: str) -> Tuple[bool, str]:
     """Verify OTP code and delete record if valid.
