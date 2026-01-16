@@ -142,19 +142,21 @@ def verify_otp(email: str, uid: str, code: str) -> Tuple[bool, str]:
     Args:
         email: Email address (will be normalized)
         uid: Firebase user UID
-        code: OTP code to verify
+        code: OTP code to verify (will be normalized/trimmed)
     
     Returns:
         tuple: (is_valid, message)
     """
     db = get_firestore_db()
     normalized_email = normalize_email(email)
+    # Normalize code by trimming whitespace
+    normalized_code = str(code).strip()
     doc_ref = db.collection('otp_codes').document(normalized_email)
     doc = doc_ref.get()
     
     # Debug log verification attempt
-    masked_code = mask_otp(code)
-    print(f"[OTP] Verification attempt for {normalized_email} (masked code: {masked_code})")
+    masked_code = mask_otp(normalized_code)
+    print(f"[OTP] Verification attempt for {normalized_email} (masked code: {masked_code}, original: '{code}')")
     
     if not doc.exists:
         print(f"[OTP] Verification failed: No OTP found for {normalized_email}")
@@ -186,21 +188,40 @@ def verify_otp(email: str, uid: str, code: str) -> Tuple[bool, str]:
                 print(f"[OTP] Verification failed: OTP expired for {normalized_email}")
                 return False, "Verification code has expired"
     
-    # Verify code hash (support both old plain code and new hash)
+    # Verify code - check both plain code (preferred) and hash (backup)
     stored_code_hash = otp_data.get('code_hash')
-    stored_plain_code = otp_data.get('code')  # Legacy support
+    stored_plain_code = otp_data.get('code')  # Temporary storage for resend
     
-    if stored_code_hash:
-        # New hashed storage
-        if not verify_otp_hash(code, stored_code_hash):
-            print(f"[OTP] Verification failed: Code mismatch for {normalized_email}")
-            return False, "Invalid verification code"
-    elif stored_plain_code:
-        # Legacy plain storage (for backward compatibility)
-        if stored_plain_code != code:
-            print(f"[OTP] Verification failed: Code mismatch for {normalized_email}")
-            return False, "Invalid verification code"
-    else:
+    # Normalize stored code if it exists
+    if stored_plain_code:
+        stored_plain_code = str(stored_plain_code).strip()
+    
+    # Debug: Log what we have stored (masked)
+    print(f"[OTP] Stored data - has_hash: {bool(stored_code_hash)}, has_plain: {bool(stored_plain_code)}")
+    print(f"[OTP] Entered code (normalized, masked): {mask_otp(normalized_code)}")
+    if stored_plain_code:
+        print(f"[OTP] Stored plain code (masked): {mask_otp(stored_plain_code)}")
+    
+    # Check plain code first (most reliable since it's what we send)
+    code_matches = False
+    
+    if stored_plain_code:
+        # Check plain code directly (string comparison after normalization)
+        code_matches = (stored_plain_code == normalized_code)
+        print(f"[OTP] Plain code verification: {code_matches}")
+        print(f"[OTP]   Stored: '{stored_plain_code}' (len={len(stored_plain_code)})")
+        print(f"[OTP]   Entered: '{normalized_code}' (len={len(normalized_code)})")
+    
+    # If plain code doesn't match, try hash verification as fallback
+    if not code_matches and stored_code_hash:
+        code_matches = verify_otp_hash(normalized_code, stored_code_hash)
+        print(f"[OTP] Hash verification (fallback): {code_matches}")
+    
+    if not code_matches:
+        print(f"[OTP] Verification failed: Code mismatch for {normalized_email}")
+        return False, "Invalid verification code"
+    
+    if not stored_code_hash and not stored_plain_code:
         print(f"[OTP] Verification failed: No code stored for {normalized_email}")
         return False, "Invalid verification code"
     
