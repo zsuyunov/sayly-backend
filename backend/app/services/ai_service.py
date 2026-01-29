@@ -1,9 +1,15 @@
+"""
+AI Service Module - Updated with lazy initialization
+This version uses lazy initialization to allow server startup without OPENAI_API_KEY.
+The API key is only checked when AI functions are actually called.
+"""
 import os
 import json
 from typing import Dict, Any, Optional
 from openai import OpenAI
 
 # Lazy initialization - only check API key when functions are called
+# This allows the server to start even if OPENAI_API_KEY is not set
 _client: Optional[OpenAI] = None
 
 def get_openai_client() -> OpenAI:
