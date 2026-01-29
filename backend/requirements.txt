@@ -23,6 +23,7 @@ annotated-types==0.7.0
 # HTTP and networking
 httpx==0.28.1
 httpcore==1.0.9
+# Note: OpenAI 1.54.5 requires compatible httpx/httpcore versions
 h11==0.16.0
 h2==4.3.0
 hpack==4.1.0

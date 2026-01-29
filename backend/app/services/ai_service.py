@@ -3,12 +3,28 @@ import json
 from typing import Dict, Any, Optional
 from openai import OpenAI
 
-# Initialize OpenAI client
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    raise ValueError("OPENAI_API_KEY environment variable is not set")
+# Lazy initialization - only check API key when functions are called
+_client: Optional[OpenAI] = None
 
-client = OpenAI(api_key=OPENAI_API_KEY)
+def get_openai_client() -> OpenAI:
+    """Get or initialize OpenAI client. Checks API key only when needed.
+    
+    Returns:
+        OpenAI client instance
+        
+    Raises:
+        ValueError if OPENAI_API_KEY environment variable is not set
+    """
+    global _client
+    if _client is None:
+        OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+        if not OPENAI_API_KEY:
+            raise ValueError(
+                "OPENAI_API_KEY environment variable is not set. "
+                "Please set it in your environment variables or Render dashboard."
+            )
+        _client = OpenAI(api_key=OPENAI_API_KEY)
+    return _client
 
 
 def transcribe_audio(audio_path: str) -> str:
@@ -24,6 +40,7 @@ def transcribe_audio(audio_path: str) -> str:
         Exception if transcription fails
     """
     try:
+        client = get_openai_client()
         with open(audio_path, "rb") as audio_file:
             transcript = client.audio.transcriptions.create(
                 model="whisper-1",
@@ -97,6 +114,7 @@ Be strict but fair. Only flag clear instances of gossip or backbiting. Count eac
 Return ONLY valid JSON, no additional text."""
 
     try:
+        client = get_openai_client()
         response = client.chat.completions.create(
             model="gpt-4o-mini",  # Using mini for cost efficiency, can upgrade to gpt-4 if needed
             messages=[
@@ -212,6 +230,7 @@ Guidelines:
 Generate a summary that helps the user reflect on their speech patterns."""
 
     try:
+        client = get_openai_client()
         response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[
