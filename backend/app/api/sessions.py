@@ -689,6 +689,13 @@ def get_session_detail(
         else:
             updated_at = None
         
+        # Extract analysis fields
+        audio_url = session_data.get('audioUrl')
+        audio_processed = session_data.get('audioProcessed', False)
+        analysis_status = session_data.get('analysisStatus', 'PENDING')
+        summary = session_data.get('summary')
+        gossip_score = session_data.get('gossipScore')
+        
         print(f"[SESSIONS] Retrieved session detail {session_id} for user {uid}")
         
         return SessionDetailResponse(
@@ -702,6 +709,11 @@ def get_session_detail(
             device=session_data.get('device', 'unknown'),
             note=note,
             updatedAt=updated_at,
+            audioUrl=audio_url,
+            audioProcessed=audio_processed,
+            analysisStatus=analysis_status,
+            summary=summary,
+            gossipScore=gossip_score,
         )
         
     except HTTPException:
@@ -851,6 +863,13 @@ def update_session_note(
         else:
             updated_at = None
         
+        # Extract analysis fields
+        audio_url = updated_session_data.get('audioUrl')
+        audio_processed = updated_session_data.get('audioProcessed', False)
+        analysis_status = updated_session_data.get('analysisStatus', 'PENDING')
+        summary = updated_session_data.get('summary')
+        gossip_score = updated_session_data.get('gossipScore')
+        
         print(f"[SESSIONS] Updated note for session {session_id} for user {uid}")
         
         return SessionDetailResponse(
@@ -864,6 +883,11 @@ def update_session_note(
             device=updated_session_data.get('device', 'unknown'),
             note=updated_note,
             updatedAt=updated_at,
+            audioUrl=audio_url,
+            audioProcessed=audio_processed,
+            analysisStatus=analysis_status,
+            summary=summary,
+            gossipScore=gossip_score,
         )
         
     except HTTPException:

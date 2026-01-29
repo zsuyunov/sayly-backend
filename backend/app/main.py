@@ -8,6 +8,8 @@ from app.api.voice import router as voice_router
 from app.api.reports import router as reports_router
 from app.api.rewards import router as rewards_router
 from app.api.privacy import router as privacy_router
+from app.api.audio import router as audio_router
+from app.api.analysis import router as analysis_router
 
 app = FastAPI(
     title="Gossip Detector API",
@@ -32,6 +34,8 @@ app.include_router(voice_router, prefix="/api")
 app.include_router(reports_router, prefix="/api")
 app.include_router(rewards_router, prefix="/api")
 app.include_router(privacy_router, prefix="/api")
+app.include_router(audio_router, prefix="/api")
+app.include_router(analysis_router, prefix="/api")
 
 
 @app.get(

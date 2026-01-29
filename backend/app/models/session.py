@@ -25,6 +25,12 @@ class ListeningSession(BaseModel):
     )
     note: Optional[str] = Field(None, description="User's reflection note for this session")
     updatedAt: Optional[datetime] = Field(None, description="When the note was last updated")
+    audioUrl: Optional[str] = Field(None, description="URL/path to the audio file for this session")
+    audioProcessed: bool = Field(False, description="Whether the audio has been processed")
+    analysisStatus: Literal["PENDING", "PROCESSING", "COMPLETED", "FAILED"] = Field(
+        "PENDING",
+        description="Status of AI analysis for this session"
+    )
 
 
 class StartSessionRequest(BaseModel):
@@ -83,4 +89,12 @@ class SessionDetailResponse(BaseModel):
     device: Literal["ios", "android", "unknown"] = Field(..., description="Device type")
     note: Optional[str] = Field(None, description="User's reflection note for this session")
     updatedAt: Optional[datetime] = Field(None, description="When the note was last updated")
+    audioUrl: Optional[str] = Field(None, description="URL/path to the audio file for this session")
+    audioProcessed: bool = Field(False, description="Whether the audio has been processed")
+    analysisStatus: Literal["PENDING", "PROCESSING", "COMPLETED", "FAILED"] = Field(
+        "PENDING",
+        description="Status of AI analysis for this session"
+    )
+    summary: Optional[str] = Field(None, description="AI-generated summary of the session")
+    gossipScore: Optional[int] = Field(None, description="Gossip score (0-100), lower is better")
 

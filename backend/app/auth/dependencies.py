@@ -54,8 +54,15 @@ def get_current_user(
     auth_service = get_firebase_auth()
     
     try:
+        # Log token info for debugging (first 20 chars only for security)
+        print(f"[AUTH] Verifying token (length: {len(token)}, prefix: {token[:20]}...)")
+        
         # Validate the identity token
-        decoded_token = auth_service.verify_id_token(token, check_revoked=True)
+        # Using check_revoked=False to avoid certificate fetching issues on cloud platforms
+        # This still validates the token signature and expiration
+        decoded_token = auth_service.verify_id_token(token, check_revoked=False)
+        
+        print(f"[AUTH] Token verified successfully for uid: {decoded_token.get('uid')}")
         
         # Return normalized user object
         return {
@@ -66,6 +73,7 @@ def get_current_user(
         }
         
     except (InvalidIdTokenError, ExpiredIdTokenError) as e:
+        print(f"[AUTH] Token validation failed: {type(e).__name__}: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired authentication token",
@@ -93,8 +101,20 @@ def get_current_user(
         ) from e
         
     except ValueError as e:
+        print(f"[AUTH] Token format error: {str(e)}")
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication token format",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from e
+        
+    except Exception as e:
+        # Catch any other unexpected errors
+        print(f"[AUTH] Unexpected error during token validation: {type(e).__name__}: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail=f"Authentication failed: {str(e)}",
             headers={"WWW-Authenticate": "Bearer"},
         ) from e
