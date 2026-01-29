@@ -65,6 +65,9 @@ class SessionSummary(BaseModel):
     flaggedCount: int = Field(..., description="Number of flagged interactions")
     positiveCount: int = Field(..., description="Number of positive interactions")
     status: Literal["ACTIVE", "STOPPED"] = Field(..., description="Current status of the session")
+    analysisStatus: Literal["PENDING", "PROCESSING", "COMPLETED", "FAILED"] = Field(
+        "PENDING", description="Status of AI analysis for the session"
+    )
 
 
 class SessionsListResponse(BaseModel):

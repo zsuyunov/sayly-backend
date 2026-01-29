@@ -532,11 +532,17 @@ def list_sessions(
             
             # Convert timestamps
             started_at = session_data.get('startedAt')
+            if started_at is None:
+                print(f"[SESSIONS] Warning: Session {doc.id} has no startedAt, skipping")
+                continue
             if hasattr(started_at, 'timestamp'):
                 started_at = datetime.fromtimestamp(started_at.timestamp(), tz=timezone.utc)
             elif isinstance(started_at, datetime):
                 if started_at.tzinfo is None:
                     started_at = started_at.replace(tzinfo=timezone.utc)
+            else:
+                print(f"[SESSIONS] Warning: Session {doc.id} has invalid startedAt type: {type(started_at)}, skipping")
+                continue
             
             ended_at = session_data.get('endedAt')
             if ended_at:
@@ -545,8 +551,13 @@ def list_sessions(
                 elif isinstance(ended_at, datetime):
                     if ended_at.tzinfo is None:
                         ended_at = ended_at.replace(tzinfo=timezone.utc)
+                else:
+                    ended_at = None
             else:
                 ended_at = None
+            
+            # Extract analysis status
+            analysis_status = session_data.get('analysisStatus', 'PENDING')
             
             # Create session summary
             session_summary = SessionSummary(
@@ -557,6 +568,7 @@ def list_sessions(
                 flaggedCount=flagged_count,
                 positiveCount=positive_count,
                 status=session_data.get('status', 'STOPPED'),
+                analysisStatus=analysis_status,
             )
             
             sessions_list.append(session_summary)
@@ -565,10 +577,12 @@ def list_sessions(
         return SessionsListResponse(sessions=sessions_list)
         
     except Exception as e:
+        import traceback
         print(f"[SESSIONS] Error listing sessions: {e}")
+        print(f"[SESSIONS] Traceback: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to retrieve sessions"
+            detail=f"Failed to retrieve sessions: {str(e)}"
         )
 
 
