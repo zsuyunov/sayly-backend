@@ -547,8 +547,10 @@ def get_chart_data(
             .where('status', '==', 'STOPPED') \
             .stream()
         
-        # Dictionary to aggregate minutes by time bucket
+        # Dictionary to aggregate minutes by time bucket (for non-today periods)
         time_buckets: Dict[str, float] = defaultdict(float)
+        # List to store individual session points (for today period)
+        individual_points: List[ChartDataPoint] = []
         earliest_session = None
         
         for doc in sessions_query:
@@ -591,35 +593,32 @@ def get_chart_data(
             total_seconds = totals.get('totalSeconds', 0)
             total_minutes = total_seconds / 60.0
             
-            # Group by time resolution
-            if time_resolution == "hour":
-                # Group by hour: YYYY-MM-DD-HH
-                bucket_key = started_at_dt.strftime("%Y-%m-%d-%H")
-            elif time_resolution == "day":
-                # Group by day: YYYY-MM-DD
-                bucket_key = started_at_dt.strftime("%Y-%m-%d")
-            elif time_resolution == "week":
-                # Group by week: Get Monday of the week
-                days_since_monday = started_at_dt.weekday()
-                monday = started_at_dt - timedelta(days=days_since_monday)
-                bucket_key = monday.strftime("%Y-%m-%d")
-            elif time_resolution == "month":
-                # Group by month: YYYY-MM
-                bucket_key = started_at_dt.strftime("%Y-%m")
-            
-            time_buckets[bucket_key] += total_minutes
+            # For "today" period, return individual sessions (not grouped)
+            if period == "today":
+                # Store individual session data
+                individual_points.append(ChartDataPoint(timestamp=started_at_dt, minutes=round(total_minutes, 1)))
+            else:
+                # Group by time resolution for other periods
+                if time_resolution == "day":
+                    # Group by day: YYYY-MM-DD
+                    bucket_key = started_at_dt.strftime("%Y-%m-%d")
+                elif time_resolution == "week":
+                    # Group by week: Get Monday of the week
+                    days_since_monday = started_at_dt.weekday()
+                    monday = started_at_dt - timedelta(days=days_since_monday)
+                    bucket_key = monday.strftime("%Y-%m-%d")
+                elif time_resolution == "month":
+                    # Group by month: YYYY-MM
+                    bucket_key = started_at_dt.strftime("%Y-%m")
+                
+                time_buckets[bucket_key] += total_minutes
         
         # Convert buckets to sorted list of ChartDataPoint
         points: List[ChartDataPoint] = []
         
-        if time_resolution == "hour":
-            # Generate all hours in the last 24 hours
-            current = period_start
-            while current <= period_end:
-                bucket_key = current.strftime("%Y-%m-%d-%H")
-                minutes = time_buckets.get(bucket_key, 0.0)
-                points.append(ChartDataPoint(timestamp=current, minutes=round(minutes, 1)))
-                current += timedelta(hours=1)
+        if period == "today":
+            # For today, use individual session points, sorted by timestamp
+            points = sorted(individual_points, key=lambda p: p.timestamp)
         elif time_resolution == "day":
             # Generate all days in the last 7 days
             current = period_start

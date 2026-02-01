@@ -11,6 +11,7 @@ from app.api.privacy import router as privacy_router
 from app.api.audio import router as audio_router
 from app.api.analysis import router as analysis_router
 from app.api.notes import router as notes_router
+from app.api.stats import router as stats_router
 
 app = FastAPI(
     title="Gossip Detector API",
@@ -38,6 +39,7 @@ app.include_router(privacy_router, prefix="/api")
 app.include_router(audio_router, prefix="/api")
 app.include_router(analysis_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
+app.include_router(stats_router, prefix="/api")
 
 
 @app.get(
