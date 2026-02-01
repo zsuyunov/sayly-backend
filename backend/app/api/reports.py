@@ -1,9 +1,11 @@
-from typing import Dict, Any
+from typing import Dict, Any, List, Literal
 from fastapi import APIRouter, Depends, HTTPException, status
 from datetime import datetime, timezone, timedelta
+from collections import defaultdict
 
 from app.auth.dependencies import get_current_user
 from app.models.report import WeeklyReportResponse, MonthlyReportResponse
+from app.models.progress import ProgressReportResponse, ChartDataResponse, ChartDataPoint
 from firebase_admin import firestore
 
 router = APIRouter(
@@ -306,5 +308,377 @@ def get_monthly_report(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to generate monthly report"
+        )
+
+
+def format_date_context(period: str, period_start: datetime, period_end: datetime) -> str:
+    """Format date context string for display."""
+    if period == "today":
+        # Format as "Jan 29"
+        return period_start.strftime("%b %d")
+    elif period == "week":
+        return "This week"
+    elif period == "month":
+        # Format as "January"
+        return period_start.strftime("%B")
+    elif period == "lifetime":
+        # Format as "Since Jan 2026"
+        return f"Since {period_start.strftime('%b %Y')}"
+    return ""
+
+
+@router.get(
+    "/progress/{period}",
+    response_model=ProgressReportResponse,
+    summary="Get progress report",
+    description="Returns aggregated statistics for a specific time period (today, week, month, lifetime).",
+    responses={
+        200: {
+            "description": "Progress report retrieved successfully",
+        },
+        400: {
+            "description": "Invalid period parameter",
+        },
+        401: {
+            "description": "Unauthorized - Invalid or missing authentication token",
+        },
+    },
+)
+def get_progress_report(
+    period: Literal["today", "week", "month", "lifetime"],
+    current_user: Dict[str, Any] = Depends(get_current_user)
+) -> ProgressReportResponse:
+    """Get progress report for a specific time period.
+    
+    Calculates statistics for the specified period:
+    - today: last 24 hours
+    - week: last 7 days
+    - month: last 30 days
+    - lifetime: all sessions
+    
+    Only includes sessions with status STOPPED.
+    
+    Args:
+        period: The time period to aggregate (today, week, month, lifetime)
+        current_user: The authenticated user object (injected via dependency)
+        
+    Returns:
+        ProgressReportResponse: Aggregated statistics for the period
+    """
+    try:
+        uid = current_user["uid"]
+        db = get_firestore_db()
+        
+        # Calculate date range based on period
+        period_end = datetime.now(timezone.utc)
+        
+        if period == "today":
+            period_start = period_end - timedelta(hours=24)
+        elif period == "week":
+            period_start = period_end - timedelta(days=7)
+        elif period == "month":
+            period_start = period_end - timedelta(days=30)
+        elif period == "lifetime":
+            # For lifetime, we'll query all sessions and find the earliest
+            period_start = None  # Will be determined from first session
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid period: {period}. Must be one of: today, week, month, lifetime"
+            )
+        
+        # Query for all stopped sessions for this user
+        sessions_query = db.collection('listening_sessions') \
+            .where('uid', '==', uid) \
+            .where('status', '==', 'STOPPED') \
+            .stream()
+        
+        # Aggregate statistics
+        total_sessions = 0
+        total_listening_seconds = 0
+        earliest_session = None
+        
+        for doc in sessions_query:
+            session_data = doc.to_dict()
+            
+            # Only process stopped sessions
+            if session_data.get('status') != 'STOPPED':
+                continue
+            
+            # Get startedAt timestamp
+            started_at = session_data.get('startedAt')
+            if not started_at:
+                continue
+            
+            # Convert Firestore Timestamp to datetime if needed
+            if hasattr(started_at, 'timestamp'):
+                started_at_dt = datetime.fromtimestamp(started_at.timestamp(), tz=timezone.utc)
+            elif isinstance(started_at, datetime):
+                started_at_dt = started_at
+                if started_at_dt.tzinfo is None:
+                    started_at_dt = started_at_dt.replace(tzinfo=timezone.utc)
+            else:
+                continue
+            
+            # For lifetime, track earliest session
+            if period == "lifetime":
+                if earliest_session is None or started_at_dt < earliest_session:
+                    earliest_session = started_at_dt
+            else:
+                # Filter by date range for other periods
+                if started_at_dt < period_start or started_at_dt > period_end:
+                    continue
+            
+            # Ensure totals is properly structured
+            totals = session_data.get('totals', {})
+            if not isinstance(totals, dict):
+                totals = {}
+            
+            # Extract statistics
+            total_seconds = totals.get('totalSeconds', 0)
+            
+            # Aggregate
+            total_sessions += 1
+            total_listening_seconds += total_seconds
+        
+        # For lifetime, set period_start to earliest session or account creation
+        if period == "lifetime":
+            if earliest_session:
+                period_start = earliest_session
+            else:
+                # If no sessions, use a default date (e.g., account creation or 1 year ago)
+                period_start = period_end - timedelta(days=365)
+        
+        # Convert seconds to minutes and round
+        total_listening_minutes = round(total_listening_seconds / 60.0)
+        
+        # Format date context
+        date_context = format_date_context(period, period_start, period_end)
+        
+        print(f"[REPORTS] {period.capitalize()} progress for user {uid}: {total_sessions} sessions, {total_listening_minutes} minutes")
+        
+        return ProgressReportResponse(
+            period=period,
+            dateContext=date_context,
+            totalSessions=total_sessions,
+            totalListeningMinutes=float(total_listening_minutes),
+            periodStart=period_start,
+            periodEnd=period_end,
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[REPORTS] Error generating {period} progress report: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate {period} progress report"
+        )
+
+
+@router.get(
+    "/chart/{period}",
+    response_model=ChartDataResponse,
+    summary="Get chart data",
+    description="Returns time series data points for chart visualization for a specific time period.",
+    responses={
+        200: {
+            "description": "Chart data retrieved successfully",
+        },
+        400: {
+            "description": "Invalid period parameter",
+        },
+        401: {
+            "description": "Unauthorized - Invalid or missing authentication token",
+        },
+    },
+)
+def get_chart_data(
+    period: Literal["today", "week", "month", "lifetime"],
+    current_user: Dict[str, Any] = Depends(get_current_user)
+) -> ChartDataResponse:
+    """Get chart data for a specific time period.
+    
+    Groups sessions by time resolution:
+    - today: per hour (last 24 hours)
+    - week: per day (last 7 days)
+    - month: per week (last 4 weeks)
+    - lifetime: per month (all months)
+    
+    Args:
+        period: The time period to aggregate (today, week, month, lifetime)
+        current_user: The authenticated user object (injected via dependency)
+        
+    Returns:
+        ChartDataResponse: Time series data points for the chart
+    """
+    try:
+        uid = current_user["uid"]
+        db = get_firestore_db()
+        
+        # Calculate date range based on period
+        period_end = datetime.now(timezone.utc)
+        
+        if period == "today":
+            period_start = period_end - timedelta(hours=24)
+            # Group by hour
+            time_resolution = "hour"
+        elif period == "week":
+            period_start = period_end - timedelta(days=7)
+            # Group by day
+            time_resolution = "day"
+        elif period == "month":
+            period_start = period_end - timedelta(days=30)
+            # Group by week
+            time_resolution = "week"
+        elif period == "lifetime":
+            # Will determine from first session
+            period_start = None
+            time_resolution = "month"
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid period: {period}. Must be one of: today, week, month, lifetime"
+            )
+        
+        # Query for all stopped sessions for this user
+        sessions_query = db.collection('listening_sessions') \
+            .where('uid', '==', uid) \
+            .where('status', '==', 'STOPPED') \
+            .stream()
+        
+        # Dictionary to aggregate minutes by time bucket
+        time_buckets: Dict[str, float] = defaultdict(float)
+        earliest_session = None
+        
+        for doc in sessions_query:
+            session_data = doc.to_dict()
+            
+            # Only process stopped sessions
+            if session_data.get('status') != 'STOPPED':
+                continue
+            
+            # Get startedAt timestamp
+            started_at = session_data.get('startedAt')
+            if not started_at:
+                continue
+            
+            # Convert Firestore Timestamp to datetime if needed
+            if hasattr(started_at, 'timestamp'):
+                started_at_dt = datetime.fromtimestamp(started_at.timestamp(), tz=timezone.utc)
+            elif isinstance(started_at, datetime):
+                started_at_dt = started_at
+                if started_at_dt.tzinfo is None:
+                    started_at_dt = started_at_dt.replace(tzinfo=timezone.utc)
+            else:
+                continue
+            
+            # For lifetime, track earliest session
+            if period == "lifetime":
+                if earliest_session is None or started_at_dt < earliest_session:
+                    earliest_session = started_at_dt
+            else:
+                # Filter by date range for other periods
+                if started_at_dt < period_start or started_at_dt > period_end:
+                    continue
+            
+            # Ensure totals is properly structured
+            totals = session_data.get('totals', {})
+            if not isinstance(totals, dict):
+                totals = {}
+            
+            # Extract listening time
+            total_seconds = totals.get('totalSeconds', 0)
+            total_minutes = total_seconds / 60.0
+            
+            # Group by time resolution
+            if time_resolution == "hour":
+                # Group by hour: YYYY-MM-DD-HH
+                bucket_key = started_at_dt.strftime("%Y-%m-%d-%H")
+            elif time_resolution == "day":
+                # Group by day: YYYY-MM-DD
+                bucket_key = started_at_dt.strftime("%Y-%m-%d")
+            elif time_resolution == "week":
+                # Group by week: Get Monday of the week
+                days_since_monday = started_at_dt.weekday()
+                monday = started_at_dt - timedelta(days=days_since_monday)
+                bucket_key = monday.strftime("%Y-%m-%d")
+            elif time_resolution == "month":
+                # Group by month: YYYY-MM
+                bucket_key = started_at_dt.strftime("%Y-%m")
+            
+            time_buckets[bucket_key] += total_minutes
+        
+        # Convert buckets to sorted list of ChartDataPoint
+        points: List[ChartDataPoint] = []
+        
+        if time_resolution == "hour":
+            # Generate all hours in the last 24 hours
+            current = period_start
+            while current <= period_end:
+                bucket_key = current.strftime("%Y-%m-%d-%H")
+                minutes = time_buckets.get(bucket_key, 0.0)
+                points.append(ChartDataPoint(timestamp=current, minutes=round(minutes, 1)))
+                current += timedelta(hours=1)
+        elif time_resolution == "day":
+            # Generate all days in the last 7 days
+            current = period_start
+            while current <= period_end:
+                bucket_key = current.strftime("%Y-%m-%d")
+                minutes = time_buckets.get(bucket_key, 0.0)
+                # Use start of day
+                day_start = current.replace(hour=0, minute=0, second=0, microsecond=0)
+                points.append(ChartDataPoint(timestamp=day_start, minutes=round(minutes, 1)))
+                current += timedelta(days=1)
+        elif time_resolution == "week":
+            # Generate all weeks in the last 30 days (approximately 4 weeks)
+            current = period_start
+            seen_weeks = set()
+            while current <= period_end:
+                days_since_monday = current.weekday()
+                monday = current - timedelta(days=days_since_monday)
+                bucket_key = monday.strftime("%Y-%m-%d")
+                if bucket_key not in seen_weeks:
+                    seen_weeks.add(bucket_key)
+                    minutes = time_buckets.get(bucket_key, 0.0)
+                    points.append(ChartDataPoint(timestamp=monday, minutes=round(minutes, 1)))
+                current += timedelta(days=7)
+        elif time_resolution == "month":
+            # For lifetime, use earliest session or default
+            if period == "lifetime":
+                if earliest_session:
+                    period_start = earliest_session.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                else:
+                    period_start = (period_end - timedelta(days=365)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            
+            # Generate all months from period_start to period_end
+            current = period_start.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+            while current <= period_end:
+                bucket_key = current.strftime("%Y-%m")
+                minutes = time_buckets.get(bucket_key, 0.0)
+                points.append(ChartDataPoint(timestamp=current, minutes=round(minutes, 1)))
+                # Move to next month
+                if current.month == 12:
+                    current = current.replace(year=current.year + 1, month=1)
+                else:
+                    current = current.replace(month=current.month + 1)
+        
+        # Sort points by timestamp
+        points.sort(key=lambda x: x.timestamp)
+        
+        print(f"[REPORTS] Chart data for {period} period: {len(points)} data points")
+        
+        return ChartDataResponse(
+            period=period,
+            points=points,
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[REPORTS] Error generating {period} chart data: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate {period} chart data"
         )
 
