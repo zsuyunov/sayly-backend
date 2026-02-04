@@ -5,7 +5,7 @@ This module defines the configuration models for dynamic threshold management
 in speaker verification. Thresholds are environment-specific and can be
 calibrated based on similarity distributions.
 """
-from typing import Optional, Dict, Literal
+from typing import Optional, Dict, Literal, Any
 from pydantic import BaseModel, Field
 from datetime import datetime
 
@@ -36,7 +36,7 @@ class ThresholdConfig(BaseModel):
         ...,
         description="When this threshold configuration was calibrated"
     )
-    similarityDistribution: Optional[Dict[str, any]] = Field(
+    similarityDistribution: Optional[Dict[str, Any]] = Field(
         None,
         description="Distribution statistics for similarity scores (for calibration)"
     )
