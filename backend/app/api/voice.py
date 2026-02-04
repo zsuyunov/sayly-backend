@@ -21,7 +21,7 @@ from app.models.voice import (
 from app.services.huggingface_service import extract_speaker_embedding
 from app.services.audio_quality_service import validate_audio_quality, validate_enrollment_audio
 from app.services.model_versioning_service import get_current_model_metadata
-from app.services.verification_service import verify_speaker
+from app.services.verification_service import verify_speaker, cosine_similarity
 from app.models.voice import EnrollmentEmbeddingMetadata
 from firebase_admin import firestore
 
@@ -255,33 +255,7 @@ def complete_voice_registration(
         )
 
 
-def cosine_similarity(embedding1: List[float], embedding2: List[float]) -> float:
-    """Compute cosine similarity between two embedding vectors.
-    
-    Args:
-        embedding1: First embedding vector
-        embedding2: Second embedding vector
-        
-    Returns:
-        Cosine similarity score (0.0 to 1.0)
-    """
-    if len(embedding1) != len(embedding2):
-        raise ValueError(f"Embedding dimensions must match: {len(embedding1)} vs {len(embedding2)}")
-    
-    # Convert to numpy arrays
-    vec1 = np.array(embedding1)
-    vec2 = np.array(embedding2)
-    
-    # Compute cosine similarity
-    dot_product = np.dot(vec1, vec2)
-    norm1 = np.linalg.norm(vec1)
-    norm2 = np.linalg.norm(vec2)
-    
-    if norm1 == 0 or norm2 == 0:
-        return 0.0
-    
-    similarity = dot_product / (norm1 * norm2)
-    return float(similarity)
+# cosine_similarity moved to app.services.verification_service to avoid circular imports
 
 
 @router.post(

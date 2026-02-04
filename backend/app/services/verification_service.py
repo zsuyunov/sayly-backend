@@ -13,7 +13,35 @@ from app.services.huggingface_service import extract_speaker_embedding
 from app.services.threshold_service import get_threshold_config, log_similarity_score
 from app.services.model_versioning_service import get_current_model_metadata, check_embedding_compatibility
 from app.models.verification import VerificationResult, VerificationDecision, ChunkVerification, VerificationPolicy
-from app.api.voice import cosine_similarity
+
+
+def cosine_similarity(embedding1: List[float], embedding2: List[float]) -> float:
+    """Compute cosine similarity between two embedding vectors.
+    
+    Args:
+        embedding1: First embedding vector
+        embedding2: Second embedding vector
+        
+    Returns:
+        Cosine similarity score (0.0 to 1.0)
+    """
+    if len(embedding1) != len(embedding2):
+        raise ValueError(f"Embedding dimensions must match: {len(embedding1)} vs {len(embedding2)}")
+    
+    # Convert to numpy arrays
+    vec1 = np.array(embedding1)
+    vec2 = np.array(embedding2)
+    
+    # Compute cosine similarity
+    dot_product = np.dot(vec1, vec2)
+    norm1 = np.linalg.norm(vec1)
+    norm2 = np.linalg.norm(vec2)
+    
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+    
+    similarity = dot_product / (norm1 * norm2)
+    return float(similarity)
 
 
 def verify_speaker(
