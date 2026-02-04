@@ -72,8 +72,8 @@ openai>=1.54.0,<2.0.0
 # Audio processing
 pydub==0.25.1
 # Required for pydub on Python 3.13+ (audioop was removed from stdlib)
-# Note: Package name is 'pyaudioop' on PyPI
-pyaudioop>=1.3.0
+# Try audioop-lts first - if this doesn't work, we may need to downgrade Python or use a workaround
+audioop-lts>=1.3.0
 
 # Numerical computing
 numpy>=1.24.0
