@@ -1,5 +1,5 @@
-from typing import Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Dict, Any, Optional
+from fastapi import APIRouter, Depends, HTTPException, status, Body
 from datetime import datetime, timezone
 import uuid
 
@@ -8,6 +8,7 @@ from app.models.session import (
     ListeningSession,
     StartSessionRequest,
     StartSessionResponse,
+    StopSessionRequest,
     StopSessionResponse,
     LastSessionResponse,
     SessionSummary,
@@ -224,6 +225,7 @@ def start_session(
 )
 def stop_session(
     session_id: str,
+    request: Optional[StopSessionRequest] = Body(None),
     current_user: Dict[str, Any] = Depends(get_current_user)
 ) -> StopSessionResponse:
     """Stop an active listening session.
@@ -233,6 +235,7 @@ def stop_session(
     
     Args:
         session_id: The ID of the session to stop
+        request: Optional request body with recording timestamps
         current_user: The authenticated user object (injected via dependency)
         
     Returns:
@@ -324,6 +327,13 @@ def stop_session(
             'status': 'STOPPED',
             'totals': updated_totals,
         }
+        
+        # Add recording timestamps if provided
+        if request:
+            if request.recordingStartedAt:
+                update_data['recordingStartedAt'] = request.recordingStartedAt
+            if request.recordingEndedAt:
+                update_data['recordingEndedAt'] = request.recordingEndedAt
         
         doc_ref.update(update_data)
         
@@ -710,6 +720,34 @@ def get_session_detail(
         summary = session_data.get('summary')
         gossip_score = session_data.get('gossipScore')
         
+        # Extract recording timestamps
+        recording_started_at = session_data.get('recordingStartedAt')
+        if recording_started_at:
+            if hasattr(recording_started_at, 'timestamp'):
+                recording_started_at = datetime.fromtimestamp(recording_started_at.timestamp(), tz=timezone.utc)
+            elif isinstance(recording_started_at, datetime):
+                if recording_started_at.tzinfo is None:
+                    recording_started_at = recording_started_at.replace(tzinfo=timezone.utc)
+        else:
+            recording_started_at = None
+        
+        recording_ended_at = session_data.get('recordingEndedAt')
+        if recording_ended_at:
+            if hasattr(recording_ended_at, 'timestamp'):
+                recording_ended_at = datetime.fromtimestamp(recording_ended_at.timestamp(), tz=timezone.utc)
+            elif isinstance(recording_ended_at, datetime):
+                if recording_ended_at.tzinfo is None:
+                    recording_ended_at = recording_ended_at.replace(tzinfo=timezone.utc)
+        else:
+            recording_ended_at = None
+        
+        # Extract audio metadata
+        audio_sample_rate = session_data.get('audioSampleRate')
+        audio_channels = session_data.get('audioChannels')
+        audio_duration_seconds = session_data.get('audioDurationSeconds')
+        audio_format = session_data.get('audioFormat')
+        error_reason = session_data.get('errorReason')
+        
         print(f"[SESSIONS] Retrieved session detail {session_id} for user {uid}")
         
         return SessionDetailResponse(
@@ -728,6 +766,13 @@ def get_session_detail(
             analysisStatus=analysis_status,
             summary=summary,
             gossipScore=gossip_score,
+            recordingStartedAt=recording_started_at,
+            recordingEndedAt=recording_ended_at,
+            audioSampleRate=audio_sample_rate,
+            audioChannels=audio_channels,
+            audioDurationSeconds=audio_duration_seconds,
+            audioFormat=audio_format,
+            errorReason=error_reason,
         )
         
     except HTTPException:
@@ -884,6 +929,34 @@ def update_session_note(
         summary = updated_session_data.get('summary')
         gossip_score = updated_session_data.get('gossipScore')
         
+        # Extract recording timestamps
+        recording_started_at = updated_session_data.get('recordingStartedAt')
+        if recording_started_at:
+            if hasattr(recording_started_at, 'timestamp'):
+                recording_started_at = datetime.fromtimestamp(recording_started_at.timestamp(), tz=timezone.utc)
+            elif isinstance(recording_started_at, datetime):
+                if recording_started_at.tzinfo is None:
+                    recording_started_at = recording_started_at.replace(tzinfo=timezone.utc)
+        else:
+            recording_started_at = None
+        
+        recording_ended_at = updated_session_data.get('recordingEndedAt')
+        if recording_ended_at:
+            if hasattr(recording_ended_at, 'timestamp'):
+                recording_ended_at = datetime.fromtimestamp(recording_ended_at.timestamp(), tz=timezone.utc)
+            elif isinstance(recording_ended_at, datetime):
+                if recording_ended_at.tzinfo is None:
+                    recording_ended_at = recording_ended_at.replace(tzinfo=timezone.utc)
+        else:
+            recording_ended_at = None
+        
+        # Extract audio metadata
+        audio_sample_rate = updated_session_data.get('audioSampleRate')
+        audio_channels = updated_session_data.get('audioChannels')
+        audio_duration_seconds = updated_session_data.get('audioDurationSeconds')
+        audio_format = updated_session_data.get('audioFormat')
+        error_reason = updated_session_data.get('errorReason')
+        
         print(f"[SESSIONS] Updated note for session {session_id} for user {uid}")
         
         return SessionDetailResponse(
@@ -902,6 +975,13 @@ def update_session_note(
             analysisStatus=analysis_status,
             summary=summary,
             gossipScore=gossip_score,
+            recordingStartedAt=recording_started_at,
+            recordingEndedAt=recording_ended_at,
+            audioSampleRate=audio_sample_rate,
+            audioChannels=audio_channels,
+            audioDurationSeconds=audio_duration_seconds,
+            audioFormat=audio_format,
+            errorReason=error_reason,
         )
         
     except HTTPException:

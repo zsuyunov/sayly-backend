@@ -1,7 +1,10 @@
-from typing import Dict, Any
-from fastapi import APIRouter, Depends, HTTPException, status
+from typing import Dict, Any, List
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from datetime import datetime, timezone
 import random
+import os
+import tempfile
+import numpy as np
 
 from app.auth.dependencies import get_current_user
 from app.models.voice import (
@@ -10,7 +13,16 @@ from app.models.voice import (
     StartVoiceRegistrationResponse,
     CompleteVoiceRegistrationRequest,
     CompleteVoiceRegistrationResponse,
+    EnrollVoiceResponse,
+    VoiceVerificationRequest,
+    VoiceVerificationResponse,
+    VoiceStatusResponse,
 )
+from app.services.huggingface_service import extract_speaker_embedding
+from app.services.audio_quality_service import validate_audio_quality, validate_enrollment_audio
+from app.services.model_versioning_service import get_current_model_metadata
+from app.services.verification_service import verify_speaker
+from app.models.voice import EnrollmentEmbeddingMetadata
 from firebase_admin import firestore
 
 router = APIRouter(
@@ -18,13 +30,14 @@ router = APIRouter(
     tags=["voice"],
 )
 
-# Sample texts for voice registration
+# Fixed prompts for voice registration (users must say exactly these texts)
+# Prompt 1 (neutral identity)
+# Prompt 2 (natural continuous speech)
+# Prompt 3 (longer, varied phonetics)
 SAMPLE_TEXTS = [
-    "The quick brown fox jumps over the lazy dog.",
-    "She sells seashells by the seashore.",
-    "How much wood would a woodchuck chuck if a woodchuck could chuck wood?",
-    "Peter Piper picked a peck of pickled peppers.",
-    "The five boxing wizards jump quickly.",
+    "I am registering my voice so the application can recognize me during my reflection sessions.",
+    "Today I am speaking clearly and naturally. This recording helps the system learn my speaking style.",
+    "Reflection helps me become more mindful of my words, actions, and intentions over time.",
 ]
 
 
@@ -239,5 +252,530 @@ def complete_voice_registration(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Failed to complete voice registration"
+        )
+
+
+def cosine_similarity(embedding1: List[float], embedding2: List[float]) -> float:
+    """Compute cosine similarity between two embedding vectors.
+    
+    Args:
+        embedding1: First embedding vector
+        embedding2: Second embedding vector
+        
+    Returns:
+        Cosine similarity score (0.0 to 1.0)
+    """
+    if len(embedding1) != len(embedding2):
+        raise ValueError(f"Embedding dimensions must match: {len(embedding1)} vs {len(embedding2)}")
+    
+    # Convert to numpy arrays
+    vec1 = np.array(embedding1)
+    vec2 = np.array(embedding2)
+    
+    # Compute cosine similarity
+    dot_product = np.dot(vec1, vec2)
+    norm1 = np.linalg.norm(vec1)
+    norm2 = np.linalg.norm(vec2)
+    
+    if norm1 == 0 or norm2 == 0:
+        return 0.0
+    
+    similarity = dot_product / (norm1 * norm2)
+    return float(similarity)
+
+
+@router.post(
+    "/enroll",
+    response_model=EnrollVoiceResponse,
+    summary="Enroll voice with 3 recordings",
+    description="Upload 3 voice recordings, validate quality, extract embeddings, and store individually in Firestore.",
+    responses={
+        200: {
+            "description": "Voice enrolled successfully",
+        },
+        400: {
+            "description": "Bad request - Invalid files or format",
+        },
+        401: {
+            "description": "Unauthorized - Invalid or missing authentication token",
+        },
+    },
+)
+async def enroll_voice(
+    audio_files: List[UploadFile] = File(..., description="3 WAV audio files (16kHz mono)"),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+) -> EnrollVoiceResponse:
+    """Enroll user's voice by processing 3 audio recordings.
+    
+    SECURITY & PRIVACY:
+    ===================
+    - Requires authentication (get_current_user dependency)
+    - Embeddings stored with uid as document ID (user-scoped)
+    - Audio files deleted immediately after embedding extraction
+    - Quality validation prevents poor enrollments
+    - Model versioning tracked for compatibility
+    
+    PROCESSING FLOW:
+    ================
+    1. Validates that exactly 3 WAV files are provided
+    2. For each file:
+       a. Validates audio quality (duration ≥8s, silence ≤30%, RMS threshold)
+       b. Extracts speaker embedding via Hugging Face API
+       c. Stores embedding individually (NOT averaged)
+    3. Computes inter-enrollment similarities (quality check)
+    4. Stores all 3 embeddings + metadata in Firestore
+    5. Deletes temporary audio files
+    
+    STORAGE:
+    ========
+    - enrollmentEmbeddings: List of 3 individual embeddings
+    - enrollmentMetadata: Per-embedding metadata with similarities
+    - Model versioning info (modelId, revision, version)
+    - Legacy voiceEmbedding: Averaged embedding (for backward compatibility)
+    
+    Args:
+        audio_files: List of 3 audio files (must be WAV format, 16kHz mono)
+        current_user: The authenticated user object (injected via dependency)
+        
+    Returns:
+        EnrollVoiceResponse: Success status and message
+        
+    Raises:
+        HTTPException: 400 if invalid files or quality check fails, 401 if unauthorized
+    """
+    uid = current_user["uid"]
+    temp_files = []
+    
+    try:
+        # Validate exactly 3 files
+        if len(audio_files) != 3:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Exactly 3 audio files are required for voice enrollment"
+            )
+        
+        # Validate file formats
+        for i, file in enumerate(audio_files):
+            if not file.filename:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"File {i+1} has no filename"
+                )
+            
+            # Check if it's a WAV file
+            if not file.filename.lower().endswith('.wav'):
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"File {i+1} must be a WAV file. Got: {file.filename}"
+                )
+            
+            # Check content type
+            if file.content_type and 'audio' not in file.content_type.lower():
+                print(f"[VOICE] Warning: File {i+1} has unexpected content type: {file.content_type}")
+        
+        print(f"[VOICE] Starting voice enrollment for user {uid}")
+        
+        # Get current model metadata
+        model_metadata = get_current_model_metadata()
+        
+        # Save files temporarily, validate quality, and extract embeddings
+        embeddings = []
+        enrollment_metadata_list = []
+        registered_at = datetime.now(timezone.utc)
+        
+        for i, file in enumerate(audio_files):
+            # Create temporary file
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+            temp_files.append(temp_file.name)
+            
+            # Read and save file content
+            content = await file.read()
+            if len(content) == 0:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"File {i+1} is empty"
+                )
+            
+            temp_file.write(content)
+            temp_file.close()
+            
+            # Validate audio quality BEFORE extracting embedding or storing
+            print(f"[VOICE] Validating audio quality for file {i+1}/{len(audio_files)}")
+            quality_result = validate_audio_quality(temp_file.name)
+            
+            if quality_result.status == "FAIL":
+                # Build detailed error message
+                error_detail = f"File {i+1} failed quality validation: {quality_result.message}"
+                if quality_result.reasons:
+                    error_detail += f" (Reasons: {', '.join(quality_result.reasons)})"
+                
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=error_detail
+                )
+            
+            # Store quality metrics for passed recordings (for audit/debugging)
+            print(f"[VOICE] File {i+1} passed quality validation: duration={quality_result.metrics.get('durationSeconds', 0):.1f}s, silence={quality_result.metrics.get('silenceRatio', 0)*100:.1f}%, RMS={quality_result.metrics.get('rms', 0):.0f}, clipping={quality_result.metrics.get('clippingRatio', 0)*100:.1f}%")
+            
+            # Extract embedding
+            print(f"[VOICE] Extracting embedding from file {i+1}/{len(audio_files)}")
+            try:
+                embedding = extract_speaker_embedding(temp_file.name)
+                embeddings.append(embedding)
+                print(f"[VOICE] Extracted embedding {i+1} (dimension: {len(embedding)})")
+            except Exception as e:
+                print(f"[VOICE] Error extracting embedding from file {i+1}: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to extract embedding from file {i+1}: {str(e)}"
+                )
+        
+        # Validate embeddings
+        if len(embeddings) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="No embeddings extracted"
+            )
+        
+        # Ensure all embeddings have the same dimension
+        embedding_dim = len(embeddings[0])
+        for i, emb in enumerate(embeddings):
+            if len(emb) != embedding_dim:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Embedding dimension mismatch: file 1 has {embedding_dim}, file {i+1} has {len(emb)}"
+                )
+        
+        # Compute similarity between enrollment embeddings (for quality check)
+        print(f"[VOICE] Computing inter-enrollment similarities for quality check")
+        for i, emb1 in enumerate(embeddings):
+            similarities_to_others = []
+            for j, emb2 in enumerate(embeddings):
+                if i != j:
+                    sim = cosine_similarity(emb1, emb2)
+                    similarities_to_others.append(sim)
+            
+            # Create enrollment metadata
+            enrollment_metadata_list.append({
+                'index': i,
+                'extractedAt': registered_at,
+                'similarityToOthers': similarities_to_others,
+            })
+        
+        # Store individual embeddings (NOT averaged) in Firestore
+        db = get_firestore_db()
+        doc_ref = db.collection('voice_profiles').document(uid)
+        
+        # Get or create profile
+        doc = doc_ref.get()
+        if doc.exists:
+            profile_data = doc.to_dict()
+        else:
+            profile_data = {
+                'uid': uid,
+                'status': 'PENDING',
+                'createdAt': registered_at,
+                'sampleText': get_random_sample_text(),
+            }
+        
+        # Update with individual embeddings and metadata
+        update_data = {
+            # Store all 3 individual embeddings (not averaged)
+            'enrollmentEmbeddings': [emb.tolist() if isinstance(emb, np.ndarray) else emb for emb in embeddings],
+            'enrollmentMetadata': enrollment_metadata_list,
+            
+            # Model versioning
+            'model': model_metadata.model_id,
+            'modelRevision': model_metadata.model_revision,
+            'modelVersion': model_metadata.internal_version,
+            
+            # Legacy field (for backward compatibility) - compute average
+            'voiceEmbedding': np.mean(embeddings, axis=0).tolist(),
+            
+            'registeredAt': registered_at,
+            'status': 'READY',
+            'completedAt': registered_at,
+            'recordingsCount': 3,
+        }
+        
+        doc_ref.set(profile_data, merge=True)
+        doc_ref.update(update_data)
+        
+        print(f"[VOICE] Successfully enrolled voice for user {uid} with {len(embeddings)} individual embeddings")
+        
+        return EnrollVoiceResponse(
+            success=True,
+            message="Voice enrolled successfully",
+            registeredAt=registered_at
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[VOICE] Error enrolling voice: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to enroll voice: {str(e)}"
+        )
+    finally:
+        # Clean up temporary files
+        for temp_file_path in temp_files:
+            try:
+                if os.path.exists(temp_file_path):
+                    os.remove(temp_file_path)
+                    print(f"[VOICE] Deleted temporary file: {temp_file_path}")
+            except Exception as e:
+                print(f"[VOICE] Warning: Could not delete temporary file {temp_file_path}: {e}")
+
+
+@router.post(
+    "/verify",
+    response_model=VoiceVerificationResponse,
+    summary="Verify speaker identity",
+    description="Compare session audio embedding with stored user embedding.",
+    responses={
+        200: {
+            "description": "Verification result",
+        },
+        401: {
+            "description": "Unauthorized - Invalid or missing authentication token",
+        },
+        404: {
+            "description": "Voice profile not found - user has not enrolled",
+        },
+    },
+)
+def verify_voice(
+    request: VoiceVerificationRequest,
+    current_user: Dict[str, Any] = Depends(get_current_user)
+) -> VoiceVerificationResponse:
+    """Verify if session audio matches the registered user's voice.
+    
+    SECURITY:
+    =========
+    - Requires authentication (get_current_user dependency)
+    - User-scoped: Only accesses current user's embeddings
+    - Uses dynamic thresholds (no hardcoded values)
+    - Logs similarity scores for audit and calibration
+    
+    VERIFICATION LOGIC:
+    ===================
+    1. Retrieves user's enrollment embeddings (all 3 individually)
+    2. Compares session embedding against each enrollment embedding
+    3. Computes:
+       - Max similarity: Best match across all enrollments
+       - Top-K mean: Mean of top 2 similarities (K=2)
+    4. Applies decision policy using dynamic thresholds:
+       - OWNER: Both metrics >= ownerThreshold
+       - UNCERTAIN: At least one >= uncertainThreshold
+       - OTHER: Both < uncertainThreshold
+    5. Returns decision + similarity scores
+    
+    Args:
+        request: Voice verification request with session audio embedding
+        current_user: The authenticated user object (injected via dependency)
+        
+    Returns:
+        VoiceVerificationResponse: Verification result and similarity score
+        
+    Raises:
+        HTTPException: 404 if user has not enrolled voice
+    """
+    try:
+        uid = current_user["uid"]
+        db = get_firestore_db()
+        
+        # Get user's voice profile
+        doc_ref = db.collection('voice_profiles').document(uid)
+        doc = doc_ref.get()
+        
+        if not doc.exists:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Voice profile not found. Please enroll your voice first."
+            )
+        
+        profile_data = doc.to_dict()
+        
+        # Get enrollment embeddings (prefer new format, fallback to legacy)
+        enrollment_embeddings = profile_data.get('enrollmentEmbeddings')
+        if not enrollment_embeddings:
+            # Fallback to legacy single embedding
+            stored_embedding = profile_data.get('voiceEmbedding')
+            if not stored_embedding:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Voice embedding not found. Please re-enroll your voice."
+                )
+            # Convert legacy single embedding to list format
+            enrollment_embeddings = [stored_embedding]
+        
+        # Use verification service (handles multi-embedding comparison and dynamic thresholds)
+        decision, warning = verify_speaker(
+            request.sessionAudioEmbedding,
+            enrollment_embeddings,
+            environment=None,  # Will use default environment
+            uid=uid
+        )
+        
+        if warning:
+            print(f"[VOICE] Verification warning for user {uid}: {warning}")
+        
+        print(f"[VOICE] Verification for user {uid}: {decision.decision} (internal={decision.internalState}, max_sim={decision.maxSimilarity:.3f}, topK_mean={decision.topKMean:.3f})")
+        
+        # Return verification result (v1: binary decision)
+        return VoiceVerificationResponse(
+            result=decision.decision,  # User-facing: OWNER or OTHER
+            score=decision.maxSimilarity if decision.maxSimilarity > 0 else None,
+            internalState=decision.internalState  # Internal state for logging
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[VOICE] Error verifying voice: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to verify voice: {str(e)}"
+        )
+
+
+@router.get(
+    "/status",
+    response_model=VoiceStatusResponse,
+    summary="Get voice registration status",
+    description="Check if the current user has registered their voice.",
+    responses={
+        200: {
+            "description": "Voice registration status",
+        },
+        401: {
+            "description": "Unauthorized - Invalid or missing authentication token",
+        },
+    },
+)
+def get_voice_status(
+    current_user: Dict[str, Any] = Depends(get_current_user)
+) -> VoiceStatusResponse:
+    """Get voice registration status for the current user.
+    
+    Args:
+        current_user: The authenticated user object (injected via dependency)
+        
+    Returns:
+        VoiceStatusResponse: Registration status and metadata
+    """
+    try:
+        uid = current_user["uid"]
+        db = get_firestore_db()
+        
+        # Get voice profile
+        doc_ref = db.collection('voice_profiles').document(uid)
+        doc = doc_ref.get()
+        
+        if not doc.exists:
+            return VoiceStatusResponse(
+                isRegistered=False,
+                registeredAt=None,
+                model=None
+            )
+        
+        profile_data = doc.to_dict()
+        voice_embedding = profile_data.get('voiceEmbedding')
+        
+        if not voice_embedding:
+            return VoiceStatusResponse(
+                isRegistered=False,
+                registeredAt=None,
+                model=None
+            )
+        
+        # Convert registeredAt timestamp
+        registered_at = None
+        if 'registeredAt' in profile_data and profile_data['registeredAt']:
+            reg_at = profile_data['registeredAt']
+            if hasattr(reg_at, 'timestamp'):
+                registered_at = datetime.fromtimestamp(reg_at.timestamp(), tz=timezone.utc)
+        
+        return VoiceStatusResponse(
+            isRegistered=True,
+            registeredAt=registered_at,
+            model=profile_data.get('model', 'speechbrain/spkrec-ecapa-voxceleb')
+        )
+        
+    except Exception as e:
+        print(f"[VOICE] Error getting voice status: {e}")
+        # Return not registered on error
+        return VoiceStatusResponse(
+            isRegistered=False,
+            registeredAt=None,
+            model=None
+        )
+
+
+@router.delete(
+    "/delete",
+    summary="Delete voice profile",
+    description="Remove the user's voice profile and embedding from the system.",
+    responses={
+        200: {
+            "description": "Voice profile deleted successfully",
+        },
+        401: {
+            "description": "Unauthorized - Invalid or missing authentication token",
+        },
+        404: {
+            "description": "Voice profile not found",
+        },
+    },
+)
+def delete_voice_profile(
+    current_user: Dict[str, Any] = Depends(get_current_user)
+) -> Dict[str, Any]:
+    """Delete the user's voice profile.
+    
+    This removes the voice embedding and profile data from Firestore.
+    The user can re-enroll their voice after deletion.
+    
+    Args:
+        current_user: The authenticated user object (injected via dependency)
+        
+    Returns:
+        Dict with success status and message
+        
+    Raises:
+        HTTPException: 404 if profile not found
+    """
+    try:
+        uid = current_user["uid"]
+        db = get_firestore_db()
+        
+        # Get voice profile
+        doc_ref = db.collection('voice_profiles').document(uid)
+        doc = doc_ref.get()
+        
+        if not doc.exists:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Voice profile not found"
+            )
+        
+        # Delete the document
+        doc_ref.delete()
+        
+        print(f"[VOICE] Deleted voice profile for user {uid}")
+        
+        return {
+            "success": True,
+            "message": "Voice profile deleted successfully"
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[VOICE] Error deleting voice profile: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to delete voice profile: {str(e)}"
         )
 

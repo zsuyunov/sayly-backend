@@ -12,6 +12,7 @@ from app.api.audio import router as audio_router
 from app.api.analysis import router as analysis_router
 from app.api.notes import router as notes_router
 from app.api.stats import router as stats_router
+from app.services.cleanup_service import run_cleanup_job
 
 app = FastAPI(
     title="Gossip Detector API",
@@ -62,3 +63,26 @@ def health_check():
 @app.get("/")
 def root():
     return {"status": "ok", "service": "Sayly backend"}
+
+
+@app.post(
+    "/admin/cleanup",
+    tags=["admin"],
+    summary="Run cleanup job",
+    description="Manually trigger cleanup of old audio files and failed sessions. Typically run as a scheduled job.",
+)
+def cleanup_endpoint():
+    """Manually trigger cleanup job.
+    
+    This endpoint should typically be called by a scheduled task (cron job, etc.)
+    rather than manually. It cleans up:
+    - Audio files older than 30 days after analysis completion
+    - Orphaned audio files
+    - Failed analysis sessions older than 7 days
+    
+    Returns:
+        Dict with cleanup statistics
+    """
+    import os
+    audio_storage_dir = os.getenv("AUDIO_STORAGE_DIR", "./audio_storage")
+    return run_cleanup_job(audio_storage_dir)

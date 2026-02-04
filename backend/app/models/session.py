@@ -31,6 +31,16 @@ class ListeningSession(BaseModel):
         "PENDING",
         description="Status of AI analysis for this session"
     )
+    # Recording timestamps for AI processing
+    recordingStartedAt: Optional[datetime] = Field(None, description="When audio recording actually started")
+    recordingEndedAt: Optional[datetime] = Field(None, description="When audio recording actually ended")
+    # Audio metadata
+    audioSampleRate: Optional[int] = Field(None, description="Audio sample rate in Hz")
+    audioChannels: Optional[int] = Field(None, description="Number of audio channels (1=mono, 2=stereo)")
+    audioDurationSeconds: Optional[float] = Field(None, description="Audio duration in seconds")
+    audioFormat: Optional[str] = Field(None, description="Audio file format (WAV, MP3, etc.)")
+    # Error tracking
+    errorReason: Optional[str] = Field(None, description="Reason for upload or analysis failure")
 
 
 class StartSessionRequest(BaseModel):
@@ -44,6 +54,12 @@ class StartSessionRequest(BaseModel):
 class StartSessionResponse(BaseModel):
     """Response model for starting a session."""
     session: ListeningSession = Field(..., description="The created or existing active session")
+
+
+class StopSessionRequest(BaseModel):
+    """Request model for stopping a session."""
+    recordingStartedAt: Optional[datetime] = Field(None, description="When audio recording actually started")
+    recordingEndedAt: Optional[datetime] = Field(None, description="When audio recording actually ended")
 
 
 class StopSessionResponse(BaseModel):
@@ -100,4 +116,14 @@ class SessionDetailResponse(BaseModel):
     )
     summary: Optional[str] = Field(None, description="AI-generated summary of the session")
     gossipScore: Optional[int] = Field(None, description="Gossip score (0-100), lower is better")
+    # Recording timestamps
+    recordingStartedAt: Optional[datetime] = Field(None, description="When audio recording actually started")
+    recordingEndedAt: Optional[datetime] = Field(None, description="When audio recording actually ended")
+    # Audio metadata
+    audioSampleRate: Optional[int] = Field(None, description="Audio sample rate in Hz")
+    audioChannels: Optional[int] = Field(None, description="Number of audio channels (1=mono, 2=stereo)")
+    audioDurationSeconds: Optional[float] = Field(None, description="Audio duration in seconds")
+    audioFormat: Optional[str] = Field(None, description="Audio file format (WAV, MP3, etc.)")
+    # Error tracking
+    errorReason: Optional[str] = Field(None, description="Reason for upload or analysis failure")
 
