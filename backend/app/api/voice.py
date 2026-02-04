@@ -259,6 +259,89 @@ def complete_voice_registration(
 
 
 @router.post(
+    "/validate",
+    summary="Validate single audio file quality",
+    description="Validate a single audio file for quality before enrollment. Returns user-friendly error messages.",
+    responses={
+        200: {
+            "description": "Audio quality validation result",
+        },
+        400: {
+            "description": "Bad request - Invalid file or quality check failed",
+        },
+        401: {
+            "description": "Unauthorized - Invalid or missing authentication token",
+        },
+    },
+)
+async def validate_audio_file(
+    audio_file: UploadFile = File(..., description="Single WAV audio file to validate"),
+    current_user: Dict[str, Any] = Depends(get_current_user)
+):
+    """Validate a single audio file for quality.
+    
+    This endpoint allows validating audio quality immediately after recording,
+    before adding it to the enrollment set. This provides immediate feedback
+    to users so they can retry a specific recording if needed.
+    
+    Args:
+        audio_file: Single audio file to validate
+        current_user: The authenticated user object (injected via dependency)
+        
+    Returns:
+        Dict with validation result and user-friendly message
+    """
+    temp_file = None
+    try:
+        # Create temporary file
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+        
+        # Read and save file content
+        content = await audio_file.read()
+        if len(content) == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Audio file is empty"
+            )
+        
+        temp_file.write(content)
+        temp_file.close()
+        
+        # Validate audio quality
+        quality_result = validate_audio_quality(temp_file.name)
+        
+        if quality_result.status == "FAIL":
+            # Return user-friendly error message
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=quality_result.message
+            )
+        
+        # Return success with metrics
+        return {
+            "valid": True,
+            "message": "Audio quality is good!",
+            "metrics": quality_result.metrics
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"[VOICE] Error validating audio file: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Could not analyze audio file. Please try recording again."
+        )
+    finally:
+        # Clean up temporary file
+        if temp_file and os.path.exists(temp_file.name):
+            try:
+                os.unlink(temp_file.name)
+            except Exception as e:
+                print(f"[VOICE] Error deleting temp file: {e}")
+
+
+@router.post(
     "/enroll",
     response_model=EnrollVoiceResponse,
     summary="Enroll voice with 3 recordings",
