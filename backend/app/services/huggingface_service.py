@@ -25,7 +25,7 @@ def get_hf_api_key() -> str:
         Hugging Face API key string
         
     Raises:
-        ValueError if HF_API_KEY environment variable is not set
+        ValueError if HF_API_KEY environment variable is not set or invalid
     """
     global _hf_api_key
     if _hf_api_key is None:
@@ -35,6 +35,10 @@ def get_hf_api_key() -> str:
                 "HF_API_KEY environment variable is not set. "
                 "Please set it in your environment variables or deployment configuration."
             )
+        # Validate API key format (should start with "hf_")
+        if not _hf_api_key.startswith("hf_"):
+            print(f"[HF] Warning: API key doesn't start with 'hf_'. Key preview: {_hf_api_key[:10]}...")
+            # Don't fail here - some keys might have different formats, but log a warning
     return _hf_api_key
 
 
@@ -56,8 +60,21 @@ def extract_speaker_embedding(audio_path: str) -> List[float]:
     Raises:
         Exception: If embedding extraction fails after retries
     """
-    api_key = get_hf_api_key()
+    # Check API key first
+    try:
+        api_key = get_hf_api_key()
+        # Log first 10 chars for debugging (don't log full key for security)
+        if api_key:
+            print(f"[HF] API key found (starts with: {api_key[:10]}...)")
+        else:
+            print("[HF] API key is None or empty")
+    except ValueError as e:
+        # API key not set - re-raise with clear message
+        print(f"[HF] API key error: {e}")
+        raise ValueError(str(e))
+    
     api_url = f"{HF_API_BASE_URL}/{HF_MODEL_NAME}"
+    print(f"[HF] Using API URL: {api_url}")
     
     # Read audio file
     try:

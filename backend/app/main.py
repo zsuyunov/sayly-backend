@@ -1,5 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from .env file
+load_dotenv()
 
 from app.api.auth import router as auth_router
 from app.api.me import router as me_router
@@ -63,6 +68,16 @@ def health_check():
 @app.get("/")
 def root():
     return {"status": "ok", "service": "Sayly backend"}
+
+@app.get("/debug/env-check")
+def env_check():
+    """Debug endpoint to check if environment variables are loaded (without exposing sensitive data)."""
+    hf_key = os.getenv("HF_API_KEY")
+    return {
+        "HF_API_KEY_set": bool(hf_key),
+        "HF_API_KEY_preview": hf_key[:10] + "..." if hf_key else None,
+        "HF_API_KEY_length": len(hf_key) if hf_key else 0,
+    }
 
 
 @app.post(

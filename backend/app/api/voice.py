@@ -520,12 +520,20 @@ async def enroll_voice(
                 embedding = extract_speaker_embedding(validation_file)
                 embeddings.append(embedding)
                 print(f"[VOICE] Extracted embedding {i+1} (dimension: {len(embedding)})")
+            except ValueError as e:
+                # API key not set
+                error_message = str(e)
+                print(f"[VOICE] Configuration error for file {i+1}: {error_message}")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Voice processing service is not configured. Please contact support."
+                )
             except Exception as e:
                 error_message = str(e)
                 print(f"[VOICE] Error extracting embedding from file {i+1}: {error_message}")
                 
                 # Provide user-friendly error messages
-                if "API key" in error_message or "invalid" in error_message.lower() or "HTML" in error_message:
+                if "API key" in error_message or "invalid" in error_message.lower() or "HTML" in error_message or "not configured" in error_message.lower():
                     user_message = "Voice processing service is temporarily unavailable. Please try again later."
                 elif "timeout" in error_message.lower():
                     user_message = "Voice processing timed out. Please try again."
