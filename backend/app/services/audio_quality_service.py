@@ -20,7 +20,7 @@ import numpy as np
 
 
 # Configurable thresholds (via environment variables)
-MIN_DURATION_SECONDS = float(os.getenv("AUDIO_MIN_DURATION_SECONDS", "8.0"))
+MIN_DURATION_SECONDS = float(os.getenv("AUDIO_MIN_DURATION_SECONDS", "4.0"))
 MAX_SILENCE_RATIO = float(os.getenv("AUDIO_MAX_SILENCE_RATIO", "0.30"))
 MIN_RMS_THRESHOLD = float(os.getenv("AUDIO_MIN_RMS", "500.0"))
 MAX_CLIPPING_RATIO = float(os.getenv("AUDIO_MAX_CLIPPING_RATIO", "0.05"))  # 5% max clipping
