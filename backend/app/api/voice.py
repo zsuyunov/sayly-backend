@@ -440,11 +440,12 @@ async def enroll_voice(
                     detail=f"File {i+1} has no filename"
                 )
             
-            # Check if it's a WAV file
-            if not file.filename.lower().endswith('.wav'):
+            # Accept both WAV and M4A files (M4A will be normalized to WAV)
+            file_ext = file.filename.lower().split('.')[-1] if '.' in file.filename else ''
+            if file_ext not in ['wav', 'm4a']:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"File {i+1} must be a WAV file. Got: {file.filename}"
+                    detail=f"File {i+1} must be a WAV or M4A file. Got: {file.filename}"
                 )
             
             # Check content type
@@ -462,8 +463,9 @@ async def enroll_voice(
         registered_at = datetime.now(timezone.utc)
         
         for i, file in enumerate(audio_files):
-            # Create temporary file
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+            # Create temporary file (preserve original extension for M4A files)
+            file_extension = os.path.splitext(file.filename or 'audio.wav')[1] or '.wav'
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_extension)
             temp_files.append(temp_file.name)
             
             # Read and save file content
@@ -477,9 +479,26 @@ async def enroll_voice(
             temp_file.write(content)
             temp_file.close()
             
+            # Normalize audio to 16kHz WAV before validation (handles format conversion)
+            # This allows Android M4A files to be converted to WAV at correct sample rate
+            normalized_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+            normalized_file.close()
+            temp_files.append(normalized_file.name)  # Track for cleanup
+            
+            validation_file = temp_file.name
+            try:
+                from app.services.audio_service import normalize_audio
+                normalize_audio(temp_file.name, normalized_file.name)
+                validation_file = normalized_file.name
+                print(f"[VOICE] Normalized file {i+1} from {file_extension} to WAV at 16kHz")
+            except Exception as normalize_error:
+                # If normalization fails, try validating original file
+                print(f"[VOICE] Normalization failed for file {i+1}, using original file: {normalize_error}")
+                validation_file = temp_file.name
+            
             # Validate audio quality BEFORE extracting embedding or storing
             print(f"[VOICE] Validating audio quality for file {i+1}/{len(audio_files)}")
-            quality_result = validate_audio_quality(temp_file.name)
+            quality_result = validate_audio_quality(validation_file)
             
             if quality_result.status == "FAIL":
                 # Build detailed error message
@@ -495,10 +514,10 @@ async def enroll_voice(
             # Store quality metrics for passed recordings (for audit/debugging)
             print(f"[VOICE] File {i+1} passed quality validation: duration={quality_result.metrics.get('durationSeconds', 0):.1f}s, silence={quality_result.metrics.get('silenceRatio', 0)*100:.1f}%, RMS={quality_result.metrics.get('rms', 0):.0f}, clipping={quality_result.metrics.get('clippingRatio', 0)*100:.1f}%")
             
-            # Extract embedding
+            # Extract embedding (use normalized file if available, otherwise original)
             print(f"[VOICE] Extracting embedding from file {i+1}/{len(audio_files)}")
             try:
-                embedding = extract_speaker_embedding(temp_file.name)
+                embedding = extract_speaker_embedding(validation_file)
                 embeddings.append(embedding)
                 print(f"[VOICE] Extracted embedding {i+1} (dimension: {len(embedding)})")
             except Exception as e:
