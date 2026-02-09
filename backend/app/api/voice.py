@@ -292,9 +292,11 @@ async def validate_audio_file(
         Dict with validation result and user-friendly message
     """
     temp_file = None
+    normalized_file = None
     try:
-        # Create temporary file
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+        # Create temporary file (preserve original extension)
+        file_extension = os.path.splitext(audio_file.filename or 'audio.wav')[1] or '.wav'
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=file_extension)
         
         # Read and save file content
         content = await audio_file.read()
@@ -307,8 +309,22 @@ async def validate_audio_file(
         temp_file.write(content)
         temp_file.close()
         
-        # Validate audio quality
-        quality_result = validate_audio_quality(temp_file.name)
+        # Normalize audio to 16kHz WAV before validation (handles format conversion)
+        # This allows Android M4A files to be converted to WAV at correct sample rate
+        normalized_file = tempfile.NamedTemporaryFile(delete=False, suffix='.wav')
+        normalized_file.close()
+        
+        try:
+            from app.services.audio_service import normalize_audio
+            normalize_audio(temp_file.name, normalized_file.name)
+            validation_file = normalized_file.name
+        except Exception as normalize_error:
+            # If normalization fails, try validating original file
+            print(f"[VOICE] Normalization failed, using original file: {normalize_error}")
+            validation_file = temp_file.name
+        
+        # Validate audio quality (now guaranteed to be WAV at 16kHz if normalization succeeded)
+        quality_result = validate_audio_quality(validation_file)
         
         if quality_result.status == "FAIL":
             # Return user-friendly error message
@@ -333,12 +349,17 @@ async def validate_audio_file(
             detail="Could not analyze audio file. Please try recording again."
         )
     finally:
-        # Clean up temporary file
+        # Clean up temporary files
         if temp_file and os.path.exists(temp_file.name):
             try:
                 os.unlink(temp_file.name)
             except Exception as e:
                 print(f"[VOICE] Error deleting temp file: {e}")
+        if normalized_file and os.path.exists(normalized_file.name):
+            try:
+                os.unlink(normalized_file.name)
+            except Exception as e:
+                print(f"[VOICE] Error deleting normalized file: {e}")
 
 
 @router.post(
