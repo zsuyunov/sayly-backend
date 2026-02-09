@@ -97,12 +97,26 @@ def extract_speaker_embedding(audio_path: str) -> List[float]:
             # Handle other HTTP errors
             if response.status_code != 200:
                 error_msg = f"HTTP {response.status_code}"
-                try:
-                    error_data = response.json()
-                    if "error" in error_data:
-                        error_msg = error_data["error"]
-                except:
-                    error_msg = response.text[:200] if response.text else error_msg
+                
+                # Check if response is HTML (error page)
+                content_type = response.headers.get('content-type', '').lower()
+                is_html = '<!doctype html>' in response.text.lower() or '<html' in response.text.lower() or 'text/html' in content_type
+                
+                if is_html:
+                    # HTML response usually means authentication error or wrong endpoint
+                    error_msg = f"HTTP {response.status_code}: Received HTML error page. This usually means the API key is invalid, missing, or the endpoint is incorrect. Please check your HF_API_KEY environment variable."
+                    print(f"[HF] HTML error response detected. Response preview: {response.text[:300]}")
+                else:
+                    # Try to parse JSON error
+                    try:
+                        error_data = response.json()
+                        if "error" in error_data:
+                            error_msg = error_data["error"]
+                        elif "message" in error_data:
+                            error_msg = error_data["message"]
+                    except:
+                        # Not JSON, use text
+                        error_msg = response.text[:200] if response.text else error_msg
                 
                 print(f"[HF] API error: {error_msg}")
                 
@@ -119,13 +133,23 @@ def extract_speaker_embedding(audio_path: str) -> List[float]:
                 else:
                     raise Exception(f"Hugging Face API error after {HF_MAX_RETRIES} attempts: {error_msg}")
             
+            # Check if response is HTML before parsing
+            content_type = response.headers.get('content-type', '').lower()
+            is_html = '<!doctype html>' in response.text.lower() or '<html' in response.text.lower() or 'text/html' in content_type
+            
+            if is_html:
+                error_msg = "Received HTML response instead of JSON. This usually means the API key is invalid or the endpoint is incorrect."
+                print(f"[HF] HTML response detected. Response preview: {response.text[:500]}")
+                raise Exception(f"Hugging Face API error: {error_msg}")
+            
             # Parse response
             try:
                 result = response.json()
             except Exception as e:
                 print(f"[HF] Error parsing JSON response: {e}")
-                print(f"[HF] Response text: {response.text[:500]}")
-                raise Exception(f"Failed to parse API response: {str(e)}")
+                print(f"[HF] Response content-type: {content_type}")
+                print(f"[HF] Response text (first 500 chars): {response.text[:500]}")
+                raise Exception(f"Failed to parse API response as JSON: {str(e)}")
             
             # Extract embedding from response
             # The response format may vary, try common field names

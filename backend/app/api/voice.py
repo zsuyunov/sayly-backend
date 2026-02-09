@@ -521,10 +521,22 @@ async def enroll_voice(
                 embeddings.append(embedding)
                 print(f"[VOICE] Extracted embedding {i+1} (dimension: {len(embedding)})")
             except Exception as e:
-                print(f"[VOICE] Error extracting embedding from file {i+1}: {e}")
+                error_message = str(e)
+                print(f"[VOICE] Error extracting embedding from file {i+1}: {error_message}")
+                
+                # Provide user-friendly error messages
+                if "API key" in error_message or "invalid" in error_message.lower() or "HTML" in error_message:
+                    user_message = "Voice processing service is temporarily unavailable. Please try again later."
+                elif "timeout" in error_message.lower():
+                    user_message = "Voice processing timed out. Please try again."
+                elif "network" in error_message.lower():
+                    user_message = "Network error during voice processing. Please check your connection and try again."
+                else:
+                    user_message = f"Failed to process recording {i+1}. Please try recording again."
+                
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=f"Failed to extract embedding from file {i+1}: {str(e)}"
+                    detail=user_message
                 )
         
         # Validate embeddings
