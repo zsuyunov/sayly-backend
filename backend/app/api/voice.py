@@ -717,12 +717,26 @@ def verify_voice(
         profile_data = doc.to_dict()
         
         # Get enrollment embeddings (prefer new format, fallback to legacy)
-        enrollment_embeddings = profile_data.get('enrollmentEmbeddings')
+        enrollment_embeddings_raw = profile_data.get('enrollmentEmbeddings')
         
         # Handle dictionary format (Firestore map) - convert to list of lists
-        if isinstance(enrollment_embeddings, dict):
-            # Sort by key (index) to maintain order if needed, though order doesn't strictly matter for verification
-            enrollment_embeddings = [enrollment_embeddings[k] for k in sorted(enrollment_embeddings.keys())]
+        if isinstance(enrollment_embeddings_raw, dict):
+            # Sort by key (index) to maintain order - handle numeric string keys
+            sorted_keys = sorted(enrollment_embeddings_raw.keys(), key=lambda x: int(x) if x.isdigit() else 0)
+            enrollment_embeddings = []
+            for k in sorted_keys:
+                emb_value = enrollment_embeddings_raw[k]
+                # Ensure it's a list
+                if isinstance(emb_value, list):
+                    enrollment_embeddings.append(emb_value)
+                else:
+                    # Try to convert if it's array-like
+                    if hasattr(emb_value, '__iter__') and not isinstance(emb_value, str):
+                        enrollment_embeddings.append(list(emb_value))
+                    else:
+                        raise ValueError(f"Invalid embedding format at key '{k}': expected list, got {type(emb_value)}")
+        else:
+            enrollment_embeddings = enrollment_embeddings_raw
             
         if not enrollment_embeddings:
             # Fallback to legacy single embedding

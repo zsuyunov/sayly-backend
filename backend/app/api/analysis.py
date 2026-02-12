@@ -128,7 +128,29 @@ async def process_audio_analysis(session_id: str, uid: str):
                 voice_profile_data = voice_profile_doc.to_dict()
                 
                 # Get enrollment embeddings (prefer new format, fallback to legacy)
-                enrollment_embeddings = voice_profile_data.get('enrollmentEmbeddings')
+                enrollment_embeddings_raw = voice_profile_data.get('enrollmentEmbeddings')
+                
+                # Handle dictionary format (Firestore map) - convert to list of lists
+                if isinstance(enrollment_embeddings_raw, dict):
+                    # Sort by key (index) to maintain order
+                    sorted_keys = sorted(enrollment_embeddings_raw.keys(), key=lambda x: int(x) if x.isdigit() else 0)
+                    enrollment_embeddings = []
+                    for k in sorted_keys:
+                        emb_value = enrollment_embeddings_raw[k]
+                        # Ensure it's a list
+                        if isinstance(emb_value, list):
+                            enrollment_embeddings.append(emb_value)
+                        else:
+                            print(f"[ANALYSIS] WARNING: Embedding at key '{k}' is not a list! Type: {type(emb_value)}")
+                            # Try to convert if it's a single value or array-like
+                            if hasattr(emb_value, '__iter__') and not isinstance(emb_value, str):
+                                enrollment_embeddings.append(list(emb_value))
+                            else:
+                                print(f"[ANALYSIS] ERROR: Cannot convert embedding at key '{k}' to list")
+                    print(f"[ANALYSIS] Converted enrollmentEmbeddings from dict to list: {len(enrollment_embeddings)} embeddings")
+                else:
+                    enrollment_embeddings = enrollment_embeddings_raw
+                
                 if not enrollment_embeddings:
                     # Fallback to legacy single embedding
                     stored_embedding = voice_profile_data.get('voiceEmbedding')
@@ -136,6 +158,19 @@ async def process_audio_analysis(session_id: str, uid: str):
                         enrollment_embeddings = [stored_embedding]
                 
                 if enrollment_embeddings:
+                    # Debug: Check embedding dimensions
+                    if enrollment_embeddings and len(enrollment_embeddings) > 0:
+                        for i, emb in enumerate(enrollment_embeddings):
+                            if isinstance(emb, list):
+                                print(f"[ANALYSIS] Enrollment embedding {i} dimension: {len(emb)}")
+                            else:
+                                print(f"[ANALYSIS] WARNING: Enrollment embedding {i} is not a list! Type: {type(emb)}")
+                                # Try to fix it
+                                if hasattr(emb, '__iter__') and not isinstance(emb, str):
+                                    enrollment_embeddings[i] = list(emb)
+                                    print(f"[ANALYSIS] Fixed embedding {i} by converting to list: {len(enrollment_embeddings[i])} dimensions")
+                                else:
+                                    print(f"[ANALYSIS] ERROR: Cannot fix embedding {i}")
                     # Voice is registered - enable verification
                     verification_enabled = True
                     print(f"[ANALYSIS] Voice registration found. Starting chunk-level verification for session {session_id} (v1: filtering mode)")
