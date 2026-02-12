@@ -8,7 +8,7 @@ from typing import Dict, Any, List, Optional
 logger = logging.getLogger(__name__)
 
 # Constants
-HF_API_URL_TEMPLATE = "https://api-inference.huggingface.co/models/{model_id}"
+HF_API_URL_TEMPLATE = "https://router.huggingface.co/hf-inference/models/{model_id}"
 DEFAULT_MODEL_ID = "openai/whisper-small"
 DEFAULT_TIMEOUT = 30
 

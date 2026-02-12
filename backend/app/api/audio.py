@@ -8,6 +8,7 @@ import wave
 import struct
 
 from app.auth.dependencies import get_current_user
+from app.services.audio_service import normalize_audio, extract_audio_metadata as extract_audio_metadata_pydub
 from firebase_admin import firestore
 
 router = APIRouter(
