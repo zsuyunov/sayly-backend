@@ -1,31 +1,27 @@
 """
 Hugging Face Service Module for Speaker Embedding Extraction
-Uses huggingface_hub InferenceClient – handles endpoint routing automatically,
-so we never need to hard-code api-inference / router URLs again.
+Uses huggingface_hub InferenceClient for endpoint routing,
+with fallbacks for different library versions.
 """
 import os
 import json
 import time
 from typing import List, Optional
 
-from huggingface_hub import InferenceClient
-from huggingface_hub.utils import HfHubHTTPError
+import requests as http_requests   # alias to avoid shadowing
 
-# Model configuration
+# ── Configuration ────────────────────────────────────────────────────────────
 HF_MODEL_NAME = "speechbrain/spkrec-ecapa-voxceleb"
-HF_API_TIMEOUT = 120  # seconds (cold starts can be slow)
+HF_API_TIMEOUT = 120   # seconds (cold starts can be slow)
 HF_MAX_RETRIES = 3
-HF_RETRY_DELAY = 5  # seconds between retries
-
-# Lazy-initialised singleton client
-_client: Optional[InferenceClient] = None
+HF_RETRY_DELAY = 5     # seconds between retries
 
 
 def get_hf_api_key() -> str:
     """Return the HF API key from the environment.
 
     Raises:
-        ValueError: if HF_API_KEY is missing or looks wrong.
+        ValueError: if HF_API_KEY is missing.
     """
     api_key = os.getenv("HF_API_KEY")
     if not api_key:
@@ -38,26 +34,95 @@ def get_hf_api_key() -> str:
     return api_key
 
 
-def _get_client() -> InferenceClient:
-    """Return (or create) a cached InferenceClient."""
-    global _client
-    if _client is None:
-        api_key = get_hf_api_key()
-        print(f"[HF] Creating InferenceClient (key starts with: {api_key[:10]}...)")
-        _client = InferenceClient(
-            model=HF_MODEL_NAME,
-            token=api_key,
-            timeout=HF_API_TIMEOUT,
-        )
-    return _client
+# ── Internal helpers ─────────────────────────────────────────────────────────
 
+def _call_via_inference_client(audio_data: bytes, api_key: str):
+    """Try using huggingface_hub InferenceClient (handles endpoint routing).
+
+    Returns parsed JSON result, or raises if the library call fails.
+    """
+    try:
+        import huggingface_hub
+        from huggingface_hub import InferenceClient
+        print(f"[HF] huggingface_hub version: {huggingface_hub.__version__}")
+    except ImportError:
+        raise RuntimeError("huggingface_hub is not installed")
+
+    client = InferenceClient(
+        model=HF_MODEL_NAME,
+        token=api_key,
+        timeout=HF_API_TIMEOUT,
+    )
+
+    # The public API changed across versions.  Try in order of preference:
+    #   1. client.post()          – public since ~0.22
+    #   2. client._post()         – private, exists in almost every version
+    raw: Optional[bytes] = None
+
+    # --- attempt 1: public post() ---
+    post_fn = getattr(client, "post", None)
+    if callable(post_fn):
+        print("[HF] Using InferenceClient.post()")
+        raw = post_fn(data=audio_data, model=HF_MODEL_NAME)
+
+    # --- attempt 2: private _post() ---
+    if raw is None:
+        _post_fn = getattr(client, "_post", None)
+        if callable(_post_fn):
+            print("[HF] Using InferenceClient._post()")
+            raw = _post_fn(data=audio_data, model=HF_MODEL_NAME)
+
+    if raw is None:
+        raise RuntimeError(
+            "InferenceClient has neither post() nor _post(). "
+            f"Installed version: {huggingface_hub.__version__}"
+        )
+
+    return json.loads(raw)
+
+
+def _call_via_requests(audio_data: bytes, api_key: str):
+    """Fallback: plain HTTP requests to known HF inference URLs."""
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+        "Content-Type": "application/octet-stream",
+    }
+
+    # Try several known URL patterns
+    candidate_urls = [
+        f"https://router.huggingface.co/hf-inference/models/{HF_MODEL_NAME}",
+        f"https://router.huggingface.co/models/{HF_MODEL_NAME}",
+        f"https://api-inference.huggingface.co/models/{HF_MODEL_NAME}",
+    ]
+
+    last_error = None
+    for url in candidate_urls:
+        try:
+            print(f"[HF] Trying URL: {url}")
+            resp = http_requests.post(
+                url,
+                headers=headers,
+                data=audio_data,
+                params={"wait_for_model": "true"},
+                timeout=HF_API_TIMEOUT,
+            )
+            if resp.status_code == 200:
+                return resp.json()
+            preview = (resp.text or "")[:200]
+            print(f"[HF] {url} → HTTP {resp.status_code}: {preview}")
+            last_error = f"HTTP {resp.status_code}: {preview}"
+        except Exception as e:
+            last_error = str(e)
+            print(f"[HF] {url} → error: {e}")
+
+    raise RuntimeError(f"All HF inference URLs failed. Last error: {last_error}")
+
+
+# ── Public API ───────────────────────────────────────────────────────────────
 
 def extract_speaker_embedding(audio_path: str) -> List[float]:
     """Extract speaker embedding from an audio file via Hugging Face Inference.
-
-    Uses ``huggingface_hub.InferenceClient`` which automatically resolves the
-    correct Inference API endpoint (router / serverless / dedicated), so we
-    don't have to guess URLs.
 
     Args:
         audio_path: Path to a 16 kHz mono WAV file.
@@ -69,11 +134,8 @@ def extract_speaker_embedding(audio_path: str) -> List[float]:
         ValueError: if the API key is not configured.
         Exception: on unrecoverable API / network errors after retries.
     """
-    # Validate API key early (raises ValueError if missing)
-    try:
-        client = _get_client()
-    except ValueError:
-        raise  # re-raise so caller can distinguish "not configured" vs "API error"
+    api_key = get_hf_api_key()
+    print(f"[HF] API key found (starts with: {api_key[:10]}...)")
 
     # Read audio bytes
     try:
@@ -86,89 +148,62 @@ def extract_speaker_embedding(audio_path: str) -> List[float]:
     last_error: Optional[str] = None
 
     for attempt in range(1, HF_MAX_RETRIES + 1):
+        print(f"[HF] Extracting embedding from {audio_path} (attempt {attempt}/{HF_MAX_RETRIES})")
         try:
-            print(f"[HF] Extracting embedding from {audio_path} (attempt {attempt}/{HF_MAX_RETRIES})")
+            # --- Primary path: InferenceClient (auto-routes) ---
+            result = _call_via_inference_client(audio_data, api_key)
+            print(f"[HF] InferenceClient succeeded")
 
-            # InferenceClient.post() sends raw bytes to the model endpoint.
-            # The library figures out the correct URL (router / serverless).
-            raw_response = client.post(
-                data=audio_data,
-                model=HF_MODEL_NAME,
-            )
-
-            # raw_response is bytes – decode to JSON
-            result = json.loads(raw_response)
-            print(f"[HF] Got response type: {type(result).__name__}")
-
-            # ---- Extract embedding from various response shapes ----
-            embedding = None
-
-            if isinstance(result, dict):
-                embedding = (
-                    result.get("embedding")
-                    or result.get("embeddings")
-                    or result.get("features")
+        except Exception as client_err:
+            print(f"[HF] InferenceClient failed: {client_err}")
+            try:
+                # --- Fallback: raw requests ---
+                result = _call_via_requests(audio_data, api_key)
+                print(f"[HF] Raw requests fallback succeeded")
+            except Exception as req_err:
+                last_error = f"InferenceClient: {client_err} | requests: {req_err}"
+                print(f"[HF] Both methods failed: {last_error}")
+                if attempt < HF_MAX_RETRIES:
+                    wait = HF_RETRY_DELAY * attempt
+                    print(f"[HF] Retrying in {wait}s …")
+                    time.sleep(wait)
+                    continue
+                raise Exception(
+                    f"Hugging Face API error after {HF_MAX_RETRIES} attempts: {last_error}"
                 )
-                # list-of-lists → take first
-                if isinstance(embedding, list) and embedding and isinstance(embedding[0], list):
-                    embedding = embedding[0]
 
-            elif isinstance(result, list):
-                embedding = result
-                if embedding and isinstance(embedding[0], list):
-                    embedding = embedding[0]
-
-            if embedding is None:
-                print(f"[HF] Unexpected response shape: {str(result)[:300]}")
-                raise Exception("Could not extract embedding from API response")
-
-            embedding_floats = [float(x) for x in embedding]
-            print(f"[HF] Successfully extracted embedding (dimension: {len(embedding_floats)})")
-            return embedding_floats
-
-        except HfHubHTTPError as e:
-            status = getattr(e.response, "status_code", None) if hasattr(e, "response") else None
-            last_error = f"HfHub HTTP error (status={status}): {e}"
-            print(f"[HF] {last_error}")
-
-            # 503 → model loading; 429 → rate limit → retry
-            if status in (429, 503) and attempt < HF_MAX_RETRIES:
-                wait = HF_RETRY_DELAY * attempt
-                print(f"[HF] Retrying in {wait}s …")
-                time.sleep(wait)
-                continue
-
-            # 4xx client errors → don't retry
-            if status and 400 <= status < 500:
-                raise Exception(f"Hugging Face API error: {e}")
-
-            # 5xx or unknown → retry
-            if attempt < HF_MAX_RETRIES:
-                wait = HF_RETRY_DELAY * attempt
-                print(f"[HF] Server error, retrying in {wait}s …")
-                time.sleep(wait)
-                continue
-
-            raise Exception(f"Hugging Face API error after {HF_MAX_RETRIES} attempts: {e}")
-
-        except json.JSONDecodeError as e:
-            last_error = f"JSON decode error: {e}"
-            print(f"[HF] {last_error}")
-            raise Exception(f"Failed to parse Hugging Face response as JSON: {e}")
-
-        except ValueError:
-            raise  # API key not set – bubble up
-
-        except Exception as e:
-            last_error = str(e)
-            print(f"[HF] Error extracting embedding: {e}")
-
-            if attempt < HF_MAX_RETRIES:
-                wait = HF_RETRY_DELAY * attempt
-                print(f"[HF] Retrying in {wait}s …")
-                time.sleep(wait)
-                continue
-
-            raise
+        # ── Parse embedding from response ────────────────────────────────
+        embedding = _extract_embedding_from_result(result)
+        embedding_floats = [float(x) for x in embedding]
+        print(f"[HF] Successfully extracted embedding (dimension: {len(embedding_floats)})")
+        return embedding_floats
 
     raise Exception(f"Failed to extract embedding after {HF_MAX_RETRIES} attempts: {last_error}")
+
+
+def _extract_embedding_from_result(result) -> list:
+    """Pull the embedding list out of whatever shape HF returned."""
+    embedding = None
+
+    if isinstance(result, dict):
+        embedding = (
+            result.get("embedding")
+            or result.get("embeddings")
+            or result.get("features")
+        )
+        if isinstance(embedding, list) and embedding and isinstance(embedding[0], list):
+            embedding = embedding[0]
+
+    elif isinstance(result, list):
+        embedding = result
+        if embedding and isinstance(embedding[0], list):
+            embedding = embedding[0]
+
+    if embedding is None:
+        print(f"[HF] Unexpected response shape: {str(result)[:300]}")
+        raise Exception("Could not extract embedding from API response")
+
+    if not isinstance(embedding, list):
+        raise Exception(f"Embedding is not a list: {type(embedding)}")
+
+    return embedding

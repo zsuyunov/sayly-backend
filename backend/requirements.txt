@@ -70,7 +70,7 @@ aiofiles==24.1.0
 openai>=1.54.0,<2.0.0
 
 # Hugging Face Hub (handles Inference API routing automatically)
-huggingface_hub>=0.25.0
+huggingface_hub>=0.24.0,<1.0.0
 
 # Audio processing
 pydub==0.25.1
