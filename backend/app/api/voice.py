@@ -533,8 +533,19 @@ async def enroll_voice(
                 print(f"[VOICE] Error extracting embedding from file {i+1}: {error_message}")
                 
                 # Provide user-friendly error messages
-                if "API key" in error_message or "invalid" in error_message.lower() or "HTML" in error_message or "not configured" in error_message.lower():
-                    user_message = "Voice processing service is temporarily unavailable. Please try again later."
+                if (
+                    "API key" in error_message
+                    or "invalid" in error_message.lower()
+                    or "received html error page" in error_message.lower()
+                    or "html" in error_message.lower()
+                    or "not configured" in error_message.lower()
+                    or "hugging face api error" in error_message.lower()
+                ):
+                    user_message = (
+                        "Voice processing service is unavailable (speaker embedding extraction failed). "
+                        "If you're the developer: check Hugging Face billing/inference access and model access, "
+                        "then restart the backend."
+                    )
                 elif "timeout" in error_message.lower():
                     user_message = "Voice processing timed out. Please try again."
                 elif "network" in error_message.lower():

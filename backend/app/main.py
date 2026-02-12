@@ -2,6 +2,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from dotenv import load_dotenv
 import os
+import requests
 
 # Load environment variables from .env file
 load_dotenv()
@@ -78,6 +79,29 @@ def env_check():
         "HF_API_KEY_preview": hf_key[:10] + "..." if hf_key else None,
         "HF_API_KEY_length": len(hf_key) if hf_key else 0,
     }
+
+
+@app.get("/debug/hf-whoami")
+def hf_whoami():
+    """Debug endpoint to verify the Hugging Face token is valid (does not call inference)."""
+    hf_key = os.getenv("HF_API_KEY")
+    if not hf_key:
+        return {"ok": False, "error": "HF_API_KEY is not set"}
+
+    try:
+        r = requests.get(
+            "https://huggingface.co/api/whoami-v2",
+            headers={"Authorization": f"Bearer {hf_key}", "Accept": "application/json"},
+            timeout=15,
+        )
+        return {
+            "ok": r.status_code == 200,
+            "status": r.status_code,
+            "contentType": r.headers.get("content-type"),
+            "bodyPreview": (r.text or "")[:300],
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
 
 
 @app.post(

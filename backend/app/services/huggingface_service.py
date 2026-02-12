@@ -10,7 +10,7 @@ import requests
 # Hugging Face API configuration
 HF_API_BASE_URL = "https://api-inference.huggingface.co/models"
 HF_MODEL_NAME = "speechbrain/spkrec-ecapa-voxceleb"
-HF_API_TIMEOUT = 30  # seconds
+HF_API_TIMEOUT = 60  # seconds (HF cold starts can be slow)
 HF_RATE_LIMIT_RETRY_DELAY = 5  # seconds
 HF_MAX_RETRIES = 3
 
@@ -85,8 +85,12 @@ def extract_speaker_embedding(audio_path: str) -> List[float]:
         raise Exception(f"Failed to read audio file: {str(e)}")
     
     # Prepare request headers
+    # Explicit headers reduce the chance of upstream returning HTML (proxies / auth pages).
     headers = {
         "Authorization": f"Bearer {api_key}",
+        "Accept": "application/json",
+        "Content-Type": "application/octet-stream",
+        "User-Agent": "sayly-backend/1.0 (+https://sayly-backend.onrender.com)",
     }
     
     # Retry logic for rate limits and temporary failures
@@ -96,18 +100,20 @@ def extract_speaker_embedding(audio_path: str) -> List[float]:
             print(f"[HF] Extracting embedding from {audio_path} (attempt {attempt + 1}/{HF_MAX_RETRIES})")
             
             # Make request to Hugging Face API
+            # wait_for_model=true avoids 503 loops during cold start
             response = requests.post(
                 api_url,
                 headers=headers,
                 data=audio_data,
+                params={"wait_for_model": "true"},
                 timeout=HF_API_TIMEOUT,
             )
             
-            # Handle rate limiting (HTTP 503)
-            if response.status_code == 503:
+            # Handle model loading / transient throttling
+            if response.status_code in (429, 503):
                 # Model is loading, wait and retry
                 wait_time = HF_RATE_LIMIT_RETRY_DELAY * (attempt + 1)
-                print(f"[HF] Model is loading, waiting {wait_time} seconds before retry...")
+                print(f"[HF] Transient HF response {response.status_code}, waiting {wait_time} seconds before retry...")
                 time.sleep(wait_time)
                 continue
             
@@ -120,9 +126,13 @@ def extract_speaker_embedding(audio_path: str) -> List[float]:
                 is_html = '<!doctype html>' in response.text.lower() or '<html' in response.text.lower() or 'text/html' in content_type
                 
                 if is_html:
-                    # HTML response usually means authentication error or wrong endpoint
-                    error_msg = f"HTTP {response.status_code}: Received HTML error page. This usually means the API key is invalid, missing, or the endpoint is incorrect. Please check your HF_API_KEY environment variable."
-                    print(f"[HF] HTML error response detected. Response preview: {response.text[:300]}")
+                    # HTML response usually means auth/billing/gating/proxy issues.
+                    error_msg = (
+                        f"HTTP {response.status_code}: Received HTML error page from Hugging Face. "
+                        f"This usually means one of: invalid token, billing/inference access not enabled, "
+                        f"model access blocked (gated/terms not accepted), or an upstream/proxy block."
+                    )
+                    print(f"[HF] HTML error response detected. content-type={content_type} preview={response.text[:300]}")
                 else:
                     # Try to parse JSON error
                     try:
