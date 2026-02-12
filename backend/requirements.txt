@@ -69,6 +69,9 @@ aiofiles==24.1.0
 # Using a more recent stable version that's compatible with httpx/httpcore
 openai>=1.54.0,<2.0.0
 
+# Hugging Face Hub (handles Inference API routing automatically)
+huggingface_hub>=0.25.0
+
 # Audio processing
 pydub==0.25.1
 # Required for pydub on Python 3.13+ (audioop was removed from stdlib)
