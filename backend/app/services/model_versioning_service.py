@@ -11,9 +11,11 @@ from firebase_admin import firestore
 
 
 # Model configuration
-HF_MODEL_ID = "speechbrain/spkrec-ecapa-voxceleb"
-HF_MODEL_REVISION = os.getenv("HF_MODEL_REVISION", "main")  # Can be commit hash or branch
-INTERNAL_MODEL_VERSION = os.getenv("INTERNAL_MODEL_VERSION", "1.0.0")  # Our versioning
+# v2: switched from HuggingFace ECAPA-TDNN to local MFCC embeddings
+# (HF serverless inference was deprecated / unavailable for this model)
+HF_MODEL_ID = "local/mfcc-speaker-embedding"
+HF_MODEL_REVISION = os.getenv("HF_MODEL_REVISION", "mfcc-v1")
+INTERNAL_MODEL_VERSION = os.getenv("INTERNAL_MODEL_VERSION", "2.0.0")  # Bumped for MFCC switch
 
 
 class ModelMetadata:

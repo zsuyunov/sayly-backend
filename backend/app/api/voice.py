@@ -520,36 +520,13 @@ async def enroll_voice(
                 embedding = extract_speaker_embedding(validation_file)
                 embeddings.append(embedding)
                 print(f"[VOICE] Extracted embedding {i+1} (dimension: {len(embedding)})")
-            except ValueError as e:
-                # API key not set
-                error_message = str(e)
-                print(f"[VOICE] Configuration error for file {i+1}: {error_message}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="Voice processing service is not configured. Please contact support."
-                )
             except Exception as e:
                 error_message = str(e)
                 print(f"[VOICE] Error extracting embedding from file {i+1}: {error_message}")
                 
                 # Provide user-friendly error messages
-                if (
-                    "API key" in error_message
-                    or "invalid" in error_message.lower()
-                    or "received html error page" in error_message.lower()
-                    or "html" in error_message.lower()
-                    or "not configured" in error_message.lower()
-                    or "hugging face api error" in error_message.lower()
-                ):
-                    user_message = (
-                        "Voice processing service is unavailable (speaker embedding extraction failed). "
-                        "If you're the developer: check Hugging Face billing/inference access and model access, "
-                        "then restart the backend."
-                    )
-                elif "timeout" in error_message.lower():
-                    user_message = "Voice processing timed out. Please try again."
-                elif "network" in error_message.lower():
-                    user_message = "Network error during voice processing. Please check your connection and try again."
+                if "too short" in error_message.lower():
+                    user_message = f"Recording {i+1} is too short for voice analysis. Please record for longer."
                 else:
                     user_message = f"Failed to process recording {i+1}. Please try recording again."
                 
