@@ -8,7 +8,10 @@ from typing import List, Optional
 import requests
 
 # Hugging Face API configuration
-HF_API_BASE_URL = "https://api-inference.huggingface.co/models"
+# NOTE (2026): Hugging Face deprecated direct `api-inference.huggingface.co`.
+# Use the Inference Router instead.
+HF_ROUTER_BASE_URL = "https://router.huggingface.co/hf-inference/models"
+HF_LEGACY_BASE_URL = "https://api-inference.huggingface.co/models"  # fallback for older setups
 HF_MODEL_NAME = "speechbrain/spkrec-ecapa-voxceleb"
 HF_API_TIMEOUT = 60  # seconds (HF cold starts can be slow)
 HF_RATE_LIMIT_RETRY_DELAY = 5  # seconds
@@ -73,7 +76,12 @@ def extract_speaker_embedding(audio_path: str) -> List[float]:
         print(f"[HF] API key error: {e}")
         raise ValueError(str(e))
     
-    api_url = f"{HF_API_BASE_URL}/{HF_MODEL_NAME}"
+    # Prefer router endpoint; keep legacy fallback for safety
+    api_urls = [
+        f"{HF_ROUTER_BASE_URL}/{HF_MODEL_NAME}",
+        f"{HF_LEGACY_BASE_URL}/{HF_MODEL_NAME}",
+    ]
+    api_url = api_urls[0]
     print(f"[HF] Using API URL: {api_url}")
     
     # Read audio file
@@ -101,13 +109,29 @@ def extract_speaker_embedding(audio_path: str) -> List[float]:
             
             # Make request to Hugging Face API
             # wait_for_model=true avoids 503 loops during cold start
-            response = requests.post(
-                api_url,
-                headers=headers,
-                data=audio_data,
-                params={"wait_for_model": "true"},
-                timeout=HF_API_TIMEOUT,
-            )
+            last_router_deprecation_error = None
+            response = None
+            for candidate_url in api_urls:
+                response = requests.post(
+                    candidate_url,
+                    headers=headers,
+                    data=audio_data,
+                    params={"wait_for_model": "true"},
+                    timeout=HF_API_TIMEOUT,
+                )
+                # If HF tells us this host is no longer supported, switch to router immediately.
+                if (
+                    response is not None
+                    and response.status_code in (400, 404, 410, 500)
+                    and "no longer supported" in (response.text or "").lower()
+                    and "router.huggingface.co" in (response.text or "").lower()
+                ):
+                    last_router_deprecation_error = (response.text or "")[:300]
+                    print(f"[HF] Legacy host deprecated. Switching to router. preview={last_router_deprecation_error}")
+                    continue
+                # Otherwise keep this response (success or a real error)
+                api_url = candidate_url
+                break
             
             # Handle model loading / transient throttling
             if response.status_code in (429, 503):
