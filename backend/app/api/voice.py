@@ -578,21 +578,23 @@ async def enroll_voice(
         else:
             existing_data = {}
         
-        # Convert embeddings to plain Python lists of floats (Firestore doesn't like numpy types)
-        enrollment_embeddings_plain = []
-        for emb in embeddings:
+        # Convert embeddings to plain Python lists of floats
+        # Firestore does NOT support nested arrays (list of lists).
+        # We must store them as a map (dictionary) where keys are indices.
+        enrollment_embeddings_map = {}
+        for idx, emb in enumerate(embeddings):
             if isinstance(emb, np.ndarray):
                 emb = emb.tolist()
-            # Ensure every element is a plain Python float (not numpy.float32/float64)
+            # Ensure every element is a plain Python float
             emb_plain = [float(x) for x in emb]
-            enrollment_embeddings_plain.append(emb_plain)
+            enrollment_embeddings_map[str(idx)] = emb_plain
         
         # Merge all data into a single dict for a single set() operation
         profile_data = {
             **existing_data,  # Preserve existing fields
             'uid': uid,
-            # Store all 3 individual embeddings (not averaged)
-            'enrollmentEmbeddings': enrollment_embeddings_plain,
+            # Store embeddings as a map/dictionary to avoid "Nested arrays not allowed" error
+            'enrollmentEmbeddings': enrollment_embeddings_map,
             'enrollmentMetadata': enrollment_metadata_list,
             
             # Model versioning
@@ -716,6 +718,12 @@ def verify_voice(
         
         # Get enrollment embeddings (prefer new format, fallback to legacy)
         enrollment_embeddings = profile_data.get('enrollmentEmbeddings')
+        
+        # Handle dictionary format (Firestore map) - convert to list of lists
+        if isinstance(enrollment_embeddings, dict):
+            # Sort by key (index) to maintain order if needed, though order doesn't strictly matter for verification
+            enrollment_embeddings = [enrollment_embeddings[k] for k in sorted(enrollment_embeddings.keys())]
+            
         if not enrollment_embeddings:
             # Fallback to legacy single embedding
             stored_embedding = profile_data.get('voiceEmbedding')
