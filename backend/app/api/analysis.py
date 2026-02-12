@@ -5,7 +5,8 @@ import os
 import numpy as np
 
 from app.auth.dependencies import get_current_user
-from app.services.ai_service import transcribe_audio, analyze_speech, generate_session_summary
+from app.services.ai_service import analyze_speech, generate_session_summary
+from app.services.whisper_service import transcribe_audio
 from app.services.verification_service import verify_session_audio, verify_chunk_audio
 from app.services.audio_chunking_service import split_audio, cleanup_chunks, reconstruct_audio_from_chunks
 from app.services.model_versioning_service import store_model_metadata_for_verification
@@ -53,6 +54,35 @@ def get_user_privacy_preferences(uid: str, db) -> Dict[str, Any]:
             'dataAnalysisEnabled': False,
             'analyticsEnabled': False,
         }
+
+
+def is_owner_segment(segment_start: float, segment_end: float, owner_chunks: list) -> bool:
+    """
+    Check if a transcript segment overlaps with OWNER chunks by at least 50%.
+    
+    Args:
+        segment_start: Start time of the transcript segment
+        segment_end: End time of the transcript segment
+        owner_chunks: List of (start, end) tuples for OWNER chunks
+        
+    Returns:
+        True if the segment is considered OWNER speech, False otherwise
+    """
+    segment_duration = segment_end - segment_start
+    if segment_duration <= 0:
+        return False
+        
+    overlap_duration = 0.0
+    for chunk_start, chunk_end in owner_chunks:
+        # Calculate overlap
+        overlap_start = max(segment_start, chunk_start)
+        overlap_end = min(segment_end, chunk_end)
+        
+        if overlap_end > overlap_start:
+            overlap_duration += (overlap_end - overlap_start)
+            
+    # If segment overlaps OWNER chunks by >= 50% of its duration, keep it
+    return (overlap_duration / segment_duration) >= 0.5
 
 
 async def process_audio_analysis(session_id: str, uid: str):
@@ -265,11 +295,30 @@ async def process_audio_analysis(session_id: str, uid: str):
             except Exception as e:
                 print(f"[ANALYSIS] Error storing model metadata: {e}")
         
-        # Step 1: Transcribe full audio (v1: no reconstruction, filter text segments instead)
-        print(f"[ANALYSIS] Transcribing full audio for session {session_id} (v1: filtering mode)")
-        transcript = transcribe_audio(audio_url)
+        # Step 1: Transcribe full audio using Whisper Service
+        print(f"[ANALYSIS] Transcribing full audio for session {session_id}")
         
-        if not transcript or not transcript.strip():
+        stt_result = None
+        try:
+            stt_result = await transcribe_audio(audio_url)
+        except Exception as stt_error:
+            print(f"[ANALYSIS] STT failed for session {session_id}: {stt_error}")
+            session_ref.update({
+                'stt': {
+                    'status': 'FAILED',
+                    'error': str(stt_error)
+                },
+                'analysisStatus': 'FAILED',
+                'errorReason': 'Speech-to-text service unavailable'
+            })
+            if chunks:
+                cleanup_chunks(chunks)
+            return
+
+        raw_text = stt_result.get("text", "")
+        segments = stt_result.get("segments", [])
+        
+        if not raw_text or not raw_text.strip():
             print(f"[ANALYSIS] Empty transcript for session {session_id}")
             session_ref.update({
                 'analysisStatus': 'COMPLETED',
@@ -278,23 +327,56 @@ async def process_audio_analysis(session_id: str, uid: str):
                 'gossipScore': 50,
                 'voiceVerificationResult': verification_result,
                 'voiceVerificationOwnerRatio': owner_ratio,
+                'stt': {
+                    'status': 'SUCCESS',
+                    'model': 'openai/whisper-small',
+                    'raw_text': '',
+                    'owner_text_only': '',
+                    'segments_count': 0
+                }
             })
-            # Cleanup chunks
             if chunks:
                 cleanup_chunks(chunks)
             return
+
+        # Step 1.5: Filter transcript based on chunk verification
+        owner_text_only = raw_text
         
-        # Step 1.5: Filter transcript based on chunk verification (v1: filter text segments)
-        # Only filter if verification was enabled and performed
-        if verification_enabled:
-            # Filter at analysis level (exclude OTHER chunks from analysis)
-            # In future, could use word-level timestamps for more precise filtering
-            filtered_transcript = transcript  # Full transcript for STT (preserves context)
-            print(f"[ANALYSIS] Analyzing speech for session {session_id} with verification (owner ratio: {owner_ratio:.2f})")
+        if verification_enabled and chunk_verifications:
+            print(f"[ANALYSIS] Filtering transcript for OWNER segments (ratio: {owner_ratio:.2f})")
+            
+            # Extract OWNER chunks
+            owner_chunks = []
+            for cv in chunk_verifications:
+                if cv.decision.decision == "OWNER":
+                    owner_chunks.append((cv.startTime, cv.endTime))
+            
+            # Filter segments
+            filtered_segments = []
+            for seg in segments:
+                if is_owner_segment(seg['start'], seg['end'], owner_chunks):
+                    filtered_segments.append(seg['text'])
+            
+            if filtered_segments:
+                owner_text_only = " ".join(filtered_segments)
+            else:
+                owner_text_only = ""
+                print(f"[ANALYSIS] All segments filtered out as non-OWNER")
         else:
-            # No verification - process all speech transparently
-            filtered_transcript = transcript
-            print(f"[ANALYSIS] Analyzing speech for session {session_id} (verification not enabled - processing all speech)")
+            print(f"[ANALYSIS] Verification disabled/not applicable - using full transcript")
+
+        # Store STT metadata
+        session_ref.update({
+            'stt': {
+                'status': 'SUCCESS',
+                'model': 'openai/whisper-small',
+                'raw_text': raw_text,
+                'owner_text_only': owner_text_only,
+                'segments_count': len(segments)
+            }
+        })
+
+        filtered_transcript = owner_text_only
         
         # Step 2: Analyze speech
         analysis = analyze_speech(filtered_transcript)
