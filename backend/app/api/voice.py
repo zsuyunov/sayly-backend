@@ -574,19 +574,25 @@ async def enroll_voice(
         # Get or create profile
         doc = doc_ref.get()
         if doc.exists:
-            profile_data = doc.to_dict()
+            existing_data = doc.to_dict()
         else:
-            profile_data = {
-                'uid': uid,
-                'status': 'PENDING',
-                'createdAt': registered_at,
-                'sampleText': get_random_sample_text(),
-            }
+            existing_data = {}
         
-        # Update with individual embeddings and metadata
-        update_data = {
+        # Convert embeddings to plain Python lists of floats (Firestore doesn't like numpy types)
+        enrollment_embeddings_plain = []
+        for emb in embeddings:
+            if isinstance(emb, np.ndarray):
+                emb = emb.tolist()
+            # Ensure every element is a plain Python float (not numpy.float32/float64)
+            emb_plain = [float(x) for x in emb]
+            enrollment_embeddings_plain.append(emb_plain)
+        
+        # Merge all data into a single dict for a single set() operation
+        profile_data = {
+            **existing_data,  # Preserve existing fields
+            'uid': uid,
             # Store all 3 individual embeddings (not averaged)
-            'enrollmentEmbeddings': [emb.tolist() if isinstance(emb, np.ndarray) else emb for emb in embeddings],
+            'enrollmentEmbeddings': enrollment_embeddings_plain,
             'enrollmentMetadata': enrollment_metadata_list,
             
             # Model versioning
@@ -595,7 +601,7 @@ async def enroll_voice(
             'modelVersion': model_metadata.internal_version,
             
             # Legacy field (for backward compatibility) - compute average
-            'voiceEmbedding': np.mean(embeddings, axis=0).tolist(),
+            'voiceEmbedding': [float(x) for x in np.mean(embeddings, axis=0).tolist()],
             
             'registeredAt': registered_at,
             'status': 'READY',
@@ -603,8 +609,14 @@ async def enroll_voice(
             'recordingsCount': 3,
         }
         
+        # Ensure createdAt and sampleText exist
+        if 'createdAt' not in profile_data:
+            profile_data['createdAt'] = registered_at
+        if 'sampleText' not in profile_data:
+            profile_data['sampleText'] = get_random_sample_text()
+        
+        # Single set() operation with merge=True
         doc_ref.set(profile_data, merge=True)
-        doc_ref.update(update_data)
         
         print(f"[VOICE] Successfully enrolled voice for user {uid} with {len(embeddings)} individual embeddings")
         
