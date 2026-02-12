@@ -9,8 +9,12 @@ import requests
 
 # Hugging Face API configuration
 # NOTE (2026): Hugging Face deprecated direct `api-inference.huggingface.co`.
-# Use the Inference Router instead.
-HF_ROUTER_BASE_URL = "https://router.huggingface.co/hf-inference/models"
+# Use the Inference Router instead. The most compatible migration is to swap host:
+#   https://api-inference.huggingface.co/models/{model}
+# -> https://router.huggingface.co/models/{model}
+HF_ROUTER_BASE_URL = "https://router.huggingface.co/models"
+# Some accounts/docs also mention provider-prefixed paths; keep as fallback.
+HF_ROUTER_HF_INFERENCE_BASE_URL = "https://router.huggingface.co/hf-inference/models"
 HF_LEGACY_BASE_URL = "https://api-inference.huggingface.co/models"  # fallback for older setups
 HF_MODEL_NAME = "speechbrain/spkrec-ecapa-voxceleb"
 HF_API_TIMEOUT = 60  # seconds (HF cold starts can be slow)
@@ -79,6 +83,7 @@ def extract_speaker_embedding(audio_path: str) -> List[float]:
     # Prefer router endpoint; keep legacy fallback for safety
     api_urls = [
         f"{HF_ROUTER_BASE_URL}/{HF_MODEL_NAME}",
+        f"{HF_ROUTER_HF_INFERENCE_BASE_URL}/{HF_MODEL_NAME}",
         f"{HF_LEGACY_BASE_URL}/{HF_MODEL_NAME}",
     ]
     api_url = api_urls[0]
@@ -119,6 +124,11 @@ def extract_speaker_embedding(audio_path: str) -> List[float]:
                     params={"wait_for_model": "true"},
                     timeout=HF_API_TIMEOUT,
                 )
+                # If this specific router path is wrong, try the next candidate.
+                if response is not None and response.status_code == 404 and candidate_url != api_urls[-1]:
+                    preview = (response.text or "")[:200]
+                    print(f"[HF] Endpoint not found (404) for {candidate_url}. Trying next. preview={preview}")
+                    continue
                 # If HF tells us this host is no longer supported, switch to router immediately.
                 if (
                     response is not None
