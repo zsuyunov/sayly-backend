@@ -6,7 +6,7 @@ import numpy as np
 
 from app.auth.dependencies import get_current_user
 from app.services.ai_service import analyze_speech, generate_session_summary
-from app.services.whisper_service import transcribe_audio
+from app.services.assemblyai_service import transcribe_audio
 from app.services.verification_service import verify_session_audio, verify_chunk_audio
 from app.services.audio_chunking_service import split_audio, cleanup_chunks, reconstruct_audio_from_chunks
 from app.services.model_versioning_service import store_model_metadata_for_verification
@@ -295,13 +295,14 @@ async def process_audio_analysis(session_id: str, uid: str):
             except Exception as e:
                 print(f"[ANALYSIS] Error storing model metadata: {e}")
         
-        # Step 1: Transcribe full audio using Whisper Service
+        # Step 1: Transcribe full audio using AssemblyAI Service
         print(f"[ANALYSIS] Transcribing full audio for session {session_id}")
         
         stt_result = None
         try:
             stt_result = await transcribe_audio(audio_url)
         except Exception as stt_error:
+            print(f"[ANALYSIS] STT failed for session {session_id}: {stt_error}")
             print(f"[ANALYSIS] STT failed for session {session_id}: {stt_error}")
             session_ref.update({
                 'stt': {
@@ -329,7 +330,7 @@ async def process_audio_analysis(session_id: str, uid: str):
                 'voiceVerificationOwnerRatio': owner_ratio,
                 'stt': {
                     'status': 'SUCCESS',
-                    'model': 'openai/whisper-small',
+                    'model': 'assemblyai',
                     'raw_text': '',
                     'owner_text_only': '',
                     'segments_count': 0
@@ -358,6 +359,7 @@ async def process_audio_analysis(session_id: str, uid: str):
                     filtered_segments.append(seg['text'])
             
             if filtered_segments:
+                # AssemblyAI returns words/segments with precise punctuation, join cleanly
                 owner_text_only = " ".join(filtered_segments)
             else:
                 owner_text_only = ""
@@ -369,7 +371,7 @@ async def process_audio_analysis(session_id: str, uid: str):
         session_ref.update({
             'stt': {
                 'status': 'SUCCESS',
-                'model': 'openai/whisper-small',
+                'model': 'assemblyai',
                 'raw_text': raw_text,
                 'owner_text_only': owner_text_only,
                 'segments_count': len(segments)
