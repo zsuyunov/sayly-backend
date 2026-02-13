@@ -20,7 +20,8 @@ class AssemblyAIService:
             raise ValueError("ASSEMBLYAI_API_KEY environment variable not set")
         
         self.headers = {
-            "authorization": self.api_key
+            "authorization": self.api_key,
+            "content-type": "application/json"
         }
 
     async def transcribe_audio(self, audio_path: str) -> Dict[str, Any]:
@@ -68,14 +69,27 @@ class AssemblyAIService:
                 # Read entire file into memory for simple async upload
                 # (httpx supports async generators but simple bytes is safer for small files < 50MB)
                 file_content = f.read()
+            
+            # Upload endpoint needs authorization header only (not content-type)
+            upload_headers = {
+                "authorization": self.api_key
+            }
                 
             response = await client.post(
                 ASSEMBLYAI_UPLOAD_URL,
-                headers=self.headers,
+                headers=upload_headers,
                 content=file_content
             )
+            if response.status_code != 200:
+                error_text = response.text
+                logger.error(f"AssemblyAI upload error {response.status_code}: {error_text}")
+                raise Exception(f"AssemblyAI upload error {response.status_code}: {error_text}")
             response.raise_for_status()
             return response.json()['upload_url']
+        except httpx.HTTPStatusError as e:
+            error_text = e.response.text if e.response else "Unknown error"
+            logger.error(f"Failed to upload file to AssemblyAI: {e} - Response: {error_text}")
+            raise Exception(f"Failed to upload file: {error_text}")
         except Exception as e:
             logger.error(f"Failed to upload file to AssemblyAI: {e}")
             raise
@@ -97,8 +111,16 @@ class AssemblyAIService:
                 json=json_data,
                 headers=self.headers
             )
+            if response.status_code != 200:
+                error_text = response.text
+                logger.error(f"AssemblyAI API error {response.status_code}: {error_text}")
+                raise Exception(f"AssemblyAI API error {response.status_code}: {error_text}")
             response.raise_for_status()
             return response.json()['id']
+        except httpx.HTTPStatusError as e:
+            error_text = e.response.text if e.response else "Unknown error"
+            logger.error(f"Failed to request transcription: {e} - Response: {error_text}")
+            raise Exception(f"Failed to request transcription: {error_text}")
         except Exception as e:
             logger.error(f"Failed to request transcription: {e}")
             raise

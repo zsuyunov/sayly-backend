@@ -111,6 +111,11 @@ def verify_speaker(
     top_k = min(2, len(sorted_similarities))
     top_k_mean = np.mean(sorted_similarities[:top_k])
     
+    # Clamp similarity scores to be >= 0 (Pydantic validation requirement)
+    # Cosine similarity can theoretically be negative, but we clamp to 0 for consistency
+    max_similarity = max(0.0, max_similarity)
+    top_k_mean = max(0.0, top_k_mean)
+    
     # Get thresholds
     threshold_config = get_threshold_config(environment)
     
