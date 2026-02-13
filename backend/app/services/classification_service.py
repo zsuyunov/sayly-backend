@@ -65,6 +65,21 @@ class HuggingFaceClassificationService:
             response.raise_for_status()
             result = response.json()
             
+            # Handle both list and dict responses from Hugging Face API
+            # Sometimes the API returns a list with one element (the result dict)
+            if isinstance(result, list):
+                if len(result) > 0:
+                    result = result[0]
+                    print(f"[CLASSIFICATION] API returned list, using first element")
+                else:
+                    print(f"[CLASSIFICATION] API returned empty list")
+                    raise Exception("Empty list response from Hugging Face API")
+            
+            # Ensure result is a dict
+            if not isinstance(result, dict):
+                print(f"[CLASSIFICATION] Unexpected response type: {type(result)}")
+                raise Exception(f"Unexpected response type from API: {type(result)}")
+            
             # Log successful classification results
             labels = result.get("labels", [])
             scores = result.get("scores", [])
@@ -76,6 +91,7 @@ class HuggingFaceClassificationService:
                 print(f"[CLASSIFICATION] All scores: {dict(zip(labels, [f'{s:.3f}' for s in scores]))}")
             else:
                 print(f"[CLASSIFICATION] Classification successful but no labels/scores in response")
+                print(f"[CLASSIFICATION] Response structure: {list(result.keys()) if isinstance(result, dict) else 'not a dict'}")
             
             return result
         except requests.exceptions.RequestException as e:
