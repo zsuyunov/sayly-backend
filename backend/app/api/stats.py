@@ -139,8 +139,20 @@ def get_weekly_stats(
             daily_totals_dict[date_key]["minutes"] += total_minutes
             daily_totals_dict[date_key]["sessions"] += 1
             
-            # TODO: Extract category data from AI analysis when available
-            # For now, category distribution will be zeros
+            # Extract category data from AI classification
+            classification = session_data.get('classification', {})
+            if classification and isinstance(classification, dict):
+                # Map classification labels to our category names
+                gossip_score = classification.get('gossip', 0.0)
+                unethical_score = classification.get('insult or unethical speech', 0.0)
+                waste_score = classification.get('wasteful talk', 0.0)
+                productive_score = classification.get('productive or meaningful speech', 0.0)
+                
+                # Add scores to category totals (weighted by session duration in minutes)
+                category_totals["gossip"] += gossip_score * total_minutes
+                category_totals["unethical"] += unethical_score * total_minutes
+                category_totals["waste"] += waste_score * total_minutes
+                category_totals["productive"] += productive_score * total_minutes
         
         # Convert total seconds to minutes
         total_listening_minutes_week = total_listening_seconds_week / 60.0
@@ -327,8 +339,20 @@ def get_monthly_stats(
             daily_totals_dict[date_key]["minutes"] += total_minutes
             daily_totals_dict[date_key]["sessions"] += 1
             
-            # TODO: Extract category data from AI analysis when available
-            # For now, category distribution will be zeros
+            # Extract category data from AI classification
+            classification = session_data.get('classification', {})
+            if classification and isinstance(classification, dict):
+                # Map classification labels to our category names
+                gossip_score = classification.get('gossip', 0.0)
+                unethical_score = classification.get('insult or unethical speech', 0.0)
+                waste_score = classification.get('wasteful talk', 0.0)
+                productive_score = classification.get('productive or meaningful speech', 0.0)
+                
+                # Add scores to category totals (weighted by session duration in minutes)
+                category_totals["gossip"] += gossip_score * total_minutes
+                category_totals["unethical"] += unethical_score * total_minutes
+                category_totals["waste"] += waste_score * total_minutes
+                category_totals["productive"] += productive_score * total_minutes
         
         # Convert total seconds to minutes
         total_listening_minutes_month = total_listening_seconds_month / 60.0
@@ -528,8 +552,20 @@ def get_lifetime_stats(
             sessions_by_month[month_key]["sessions"] += 1
             sessions_by_month[month_key]["days"].add(date_key)
             
-            # TODO: Extract category data from AI analysis when available
-            # For now, category distribution will be zeros
+            # Extract category data from AI classification
+            classification = session_data.get('classification', {})
+            if classification and isinstance(classification, dict):
+                # Map classification labels to our category names
+                gossip_score = classification.get('gossip', 0.0)
+                unethical_score = classification.get('insult or unethical speech', 0.0)
+                waste_score = classification.get('wasteful talk', 0.0)
+                productive_score = classification.get('productive or meaningful speech', 0.0)
+                
+                # Add scores to category totals (weighted by session duration in minutes)
+                category_totals["gossip"] += gossip_score * total_minutes
+                category_totals["unethical"] += unethical_score * total_minutes
+                category_totals["waste"] += waste_score * total_minutes
+                category_totals["productive"] += productive_score * total_minutes
         
         # Convert total seconds to minutes
         total_listening_minutes = total_listening_seconds / 60.0

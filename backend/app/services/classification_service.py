@@ -95,19 +95,44 @@ class HuggingFaceClassificationService:
                 result = response.json()
                 
                 # Handle both list and dict responses from Hugging Face API
-                # Sometimes the API returns a list with one element (the result dict)
+                # The API can return:
+                # 1. A dict with "labels" and "scores" arrays
+                # 2. A dict with "label" and "score" (singular)
+                # 3. A list of dicts, each with "label" and "score"
+                # 4. A list with one dict element
                 if isinstance(result, list):
-                    if len(result) > 0:
-                        result = result[0]
-                        print(f"[CLASSIFICATION] API returned list, using first element")
-                    else:
+                    if len(result) == 0:
                         print(f"[CLASSIFICATION] API returned empty list")
                         raise Exception("Empty list response from Hugging Face API")
+                    
+                    # Check if list contains dicts with "label"/"score" (need to aggregate)
+                    if isinstance(result[0], dict) and "label" in result[0] and "score" in result[0]:
+                        # Aggregate all label/score pairs into arrays
+                        labels = [item["label"] for item in result if "label" in item]
+                        scores = [item["score"] for item in result if "score" in item]
+                        result = {"labels": labels, "scores": scores}
+                        print(f"[CLASSIFICATION] Aggregated {len(labels)} label/score pairs from list response")
+                    else:
+                        # List with one dict element (standard format)
+                        result = result[0]
+                        print(f"[CLASSIFICATION] API returned list, using first element")
                 
                 # Ensure result is a dict
                 if not isinstance(result, dict):
                     print(f"[CLASSIFICATION] Unexpected response type: {type(result)}")
                     raise Exception(f"Unexpected response type from API: {type(result)}")
+                
+                # Normalize response format - handle both "label"/"score" (singular) and "labels"/"scores" (plural)
+                if "label" in result and "score" in result and "labels" not in result:
+                    # Single label/score format - convert to plural arrays
+                    result = {
+                        "labels": [result["label"]],
+                        "scores": [result["score"]]
+                    }
+                    print(f"[CLASSIFICATION] Converted singular format to plural arrays")
+                elif "labels" not in result or "scores" not in result:
+                    print(f"[CLASSIFICATION] Unexpected response structure: {list(result.keys())}")
+                    raise Exception(f"Unexpected response structure: missing 'labels'/'scores' or 'label'/'score'")
                 
                 # Log successful classification results
                 labels = result.get("labels", [])

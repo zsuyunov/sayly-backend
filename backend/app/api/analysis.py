@@ -406,6 +406,8 @@ async def process_audio_analysis(session_id: str, uid: str):
             'totals': updated_totals,
             'summary': summary,
             'gossipScore': analysis.get('score', 50),
+            # Store full classification results for stats aggregation
+            'classification': analysis.get('classification', {}),
         }
         
         # Add verification results (v1: store for UX and internal logging)
