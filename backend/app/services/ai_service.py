@@ -43,11 +43,28 @@ def analyze_speech(text: str) -> Dict[str, Any]:
         labels = result.get("labels", [])
         scores = result.get("scores", [])
         
-        # Create a mapping of label to score
-        classification = dict(zip(labels, scores))
+        # Extract clean category names (remove descriptions after colon)
+        clean_labels = []
+        for label in labels:
+            # Extract category name before colon
+            category = label.split(":")[0].strip()
+            # Map to our standard category names
+            if "gossip" in category.lower():
+                clean_labels.append("gossip")
+            elif "insult" in category.lower() or "unethical" in category.lower():
+                clean_labels.append("insult or unethical speech")
+            elif "wasteful" in category.lower() or "waste" in category.lower():
+                clean_labels.append("wasteful talk")
+            elif "productive" in category.lower() or "meaningful" in category.lower():
+                clean_labels.append("productive or meaningful speech")
+            else:
+                clean_labels.append(category)
         
-        # Determine top category
-        top_category = labels[0] if labels else "unknown"
+        # Create a mapping of clean label to score
+        classification = dict(zip(clean_labels, scores))
+        
+        # Determine top category (using clean label)
+        top_category = clean_labels[0] if clean_labels else "unknown"
         top_score = scores[0] if scores else 0.0
         
         # Determine if speech is flagged (negative)
