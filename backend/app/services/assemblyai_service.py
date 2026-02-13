@@ -101,7 +101,7 @@ class AssemblyAIService:
         json_data = {
             "audio_url": audio_url,
             "speaker_labels": False,  # We handle speaker ID via MFCC locally
-            "punctuation": True,
+            "punctuate": True,
             "format_text": True
         }
         
