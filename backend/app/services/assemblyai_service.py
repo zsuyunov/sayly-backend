@@ -62,6 +62,7 @@ class AssemblyAIService:
         if not os.path.exists(audio_path):
             raise FileNotFoundError(f"Audio file not found: {audio_path}")
             
+        print(f"[ASSEMBLYAI] Uploading audio file: {audio_path}")
         logger.info(f"Uploading audio file: {audio_path}")
         
         try:
@@ -82,10 +83,13 @@ class AssemblyAIService:
             )
             if response.status_code != 200:
                 error_text = response.text
+                print(f"[ASSEMBLYAI] Upload error {response.status_code}: {error_text}")
                 logger.error(f"AssemblyAI upload error {response.status_code}: {error_text}")
                 raise Exception(f"AssemblyAI upload error {response.status_code}: {error_text}")
             response.raise_for_status()
-            return response.json()['upload_url']
+            upload_url = response.json()['upload_url']
+            print(f"[ASSEMBLYAI] Upload successful, upload_url: {upload_url[:50]}...")
+            return upload_url
         except httpx.HTTPStatusError as e:
             error_text = e.response.text if e.response else "Unknown error"
             logger.error(f"Failed to upload file to AssemblyAI: {e} - Response: {error_text}")
@@ -96,6 +100,7 @@ class AssemblyAIService:
 
     async def _request_transcription(self, client: httpx.AsyncClient, audio_url: str) -> str:
         """Request transcription for uploaded audio."""
+        print(f"[ASSEMBLYAI] Requesting transcription...")
         logger.info("Requesting transcription...")
         
         json_data = {
@@ -113,10 +118,13 @@ class AssemblyAIService:
             )
             if response.status_code != 200:
                 error_text = response.text
+                print(f"[ASSEMBLYAI] API error {response.status_code}: {error_text}")
                 logger.error(f"AssemblyAI API error {response.status_code}: {error_text}")
                 raise Exception(f"AssemblyAI API error {response.status_code}: {error_text}")
             response.raise_for_status()
-            return response.json()['id']
+            transcript_id = response.json()['id']
+            print(f"[ASSEMBLYAI] Transcription requested, ID: {transcript_id}")
+            return transcript_id
         except httpx.HTTPStatusError as e:
             error_text = e.response.text if e.response else "Unknown error"
             logger.error(f"Failed to request transcription: {e} - Response: {error_text}")
@@ -128,6 +136,7 @@ class AssemblyAIService:
     async def _poll_for_completion(self, client: httpx.AsyncClient, transcript_id: str) -> Dict[str, Any]:
         """Poll AssemblyAI API until transcription is complete."""
         polling_endpoint = f"{ASSEMBLYAI_TRANSCRIPT_URL}/{transcript_id}"
+        print(f"[ASSEMBLYAI] Polling for transcription completion (ID: {transcript_id})...")
         
         start_time = asyncio.get_event_loop().time()
         while True:
@@ -142,6 +151,7 @@ class AssemblyAIService:
                 status = result['status']
                 
                 if status == 'completed':
+                    print(f"[ASSEMBLYAI] Transcription completed for transcript {transcript_id}")
                     logger.info("Transcription completed")
                     return result
                 elif status == 'error':
