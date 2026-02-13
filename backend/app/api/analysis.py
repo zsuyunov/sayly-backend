@@ -385,7 +385,7 @@ async def process_audio_analysis(session_id: str, uid: str):
         
         # Step 3: Generate summary
         print(f"[ANALYSIS] Generating summary for session {session_id}")
-        summary = generate_session_summary(analysis, transcript)
+        summary = generate_session_summary(analysis, raw_text)
         
         # Step 4: Update session with results
         # Update totals based on analysis
