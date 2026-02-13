@@ -18,7 +18,7 @@ from app.models.voice import (
     VoiceVerificationResponse,
     VoiceStatusResponse,
 )
-from app.services.huggingface_service import extract_speaker_embedding
+from app.services.embedding_service import extract_speaker_embedding
 from app.services.audio_quality_service import validate_audio_quality, validate_enrollment_audio
 from app.services.model_versioning_service import get_current_model_metadata
 from app.services.verification_service import verify_speaker, cosine_similarity

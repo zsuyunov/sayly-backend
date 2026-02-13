@@ -9,7 +9,7 @@ from typing import List, Optional, Tuple
 from datetime import datetime, timezone
 import numpy as np
 
-from app.services.huggingface_service import extract_speaker_embedding
+from app.services.embedding_service import extract_speaker_embedding
 from app.services.threshold_service import get_threshold_config, log_similarity_score
 from app.services.model_versioning_service import get_current_model_metadata, check_embedding_compatibility
 from app.models.verification import VerificationResult, VerificationDecision, ChunkVerification, VerificationPolicy
