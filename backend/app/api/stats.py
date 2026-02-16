@@ -98,8 +98,12 @@ def get_weekly_stats(
         for doc in sessions_query:
             session_data = doc.to_dict()
             
-            # Only process stopped sessions
+            # Only process stopped sessions with completed analysis
             if session_data.get('status') != 'STOPPED':
+                continue
+            
+            # Only include sessions with completed analysis (classification data exists)
+            if session_data.get('analysisStatus') != 'COMPLETED':
                 continue
             
             # Get startedAt timestamp
@@ -140,15 +144,24 @@ def get_weekly_stats(
             daily_totals_dict[date_key]["sessions"] += 1
             
             # Extract category data from AI classification
+            # IMPORTANT: Include ALL sessions with classification data, even if scores are low
+            # Any session with at least one category detected should be included in stats
             classification = session_data.get('classification', {})
-            if classification and isinstance(classification, dict):
+            if classification and isinstance(classification, dict) and len(classification) > 0:
                 # Map classification labels to our category names
-                gossip_score = classification.get('gossip', 0.0)
-                unethical_score = classification.get('insult or unethical speech', 0.0)
-                waste_score = classification.get('wasteful talk', 0.0)
-                productive_score = classification.get('productive or meaningful speech', 0.0)
+                # Ensure scores are floats (handle string conversion if needed)
+                gossip_score = float(classification.get('gossip', 0.0) or 0.0)
+                unethical_score = float(classification.get('insult or unethical speech', 0.0) or 0.0)
+                waste_score = float(classification.get('wasteful talk', 0.0) or 0.0)
+                productive_score = float(classification.get('productive or meaningful speech', 0.0) or 0.0)
+                
+                # Debug logging for first few sessions with classification
+                if total_sessions_week < 3:
+                    print(f"[STATS] Session included - classification: {classification}")
+                    print(f"[STATS] Extracted scores: gossip={gossip_score}, unethical={unethical_score}, waste={waste_score}, productive={productive_score}, minutes={total_minutes:.2f}")
                 
                 # Add scores to category totals (weighted by session duration in minutes)
+                # Even if scores are low, they contribute to the distribution
                 category_totals["gossip"] += gossip_score * total_minutes
                 category_totals["unethical"] += unethical_score * total_minutes
                 category_totals["waste"] += waste_score * total_minutes
@@ -189,6 +202,7 @@ def get_weekly_stats(
             )
         
         print(f"[STATS] Weekly stats for user {uid}: {total_sessions_week} sessions, {total_listening_minutes_week:.2f} minutes")
+        print(f"[STATS] Category totals: gossip={category_totals['gossip']:.2f}, unethical={category_totals['unethical']:.2f}, waste={category_totals['waste']:.2f}, productive={category_totals['productive']:.2f}")
         
         return WeeklyStatsResponse(
             total_sessions_week=total_sessions_week,
@@ -298,8 +312,12 @@ def get_monthly_stats(
         for doc in sessions_query:
             session_data = doc.to_dict()
             
-            # Only process stopped sessions
+            # Only process stopped sessions with completed analysis
             if session_data.get('status') != 'STOPPED':
+                continue
+            
+            # Only include sessions with completed analysis (classification data exists)
+            if session_data.get('analysisStatus') != 'COMPLETED':
                 continue
             
             # Get startedAt timestamp
@@ -340,15 +358,19 @@ def get_monthly_stats(
             daily_totals_dict[date_key]["sessions"] += 1
             
             # Extract category data from AI classification
+            # IMPORTANT: Include ALL sessions with classification data, even if scores are low
+            # Any session with at least one category detected should be included in stats
             classification = session_data.get('classification', {})
-            if classification and isinstance(classification, dict):
+            if classification and isinstance(classification, dict) and len(classification) > 0:
                 # Map classification labels to our category names
-                gossip_score = classification.get('gossip', 0.0)
-                unethical_score = classification.get('insult or unethical speech', 0.0)
-                waste_score = classification.get('wasteful talk', 0.0)
-                productive_score = classification.get('productive or meaningful speech', 0.0)
+                # Ensure scores are floats (handle string conversion if needed)
+                gossip_score = float(classification.get('gossip', 0.0) or 0.0)
+                unethical_score = float(classification.get('insult or unethical speech', 0.0) or 0.0)
+                waste_score = float(classification.get('wasteful talk', 0.0) or 0.0)
+                productive_score = float(classification.get('productive or meaningful speech', 0.0) or 0.0)
                 
                 # Add scores to category totals (weighted by session duration in minutes)
+                # Even if scores are low, they contribute to the distribution
                 category_totals["gossip"] += gossip_score * total_minutes
                 category_totals["unethical"] += unethical_score * total_minutes
                 category_totals["waste"] += waste_score * total_minutes
@@ -397,6 +419,7 @@ def get_monthly_stats(
         month_name = f"{month_names[target_month]} {target_year}"
         
         print(f"[STATS] Monthly stats for user {uid}, {month_name}: {total_sessions_month} sessions, {total_listening_minutes_month:.2f} minutes")
+        print(f"[STATS] Category totals: gossip={category_totals['gossip']:.2f}, unethical={category_totals['unethical']:.2f}, waste={category_totals['waste']:.2f}, productive={category_totals['productive']:.2f}")
         
         return MonthlyStatsResponse(
             total_sessions_month=total_sessions_month,
@@ -505,8 +528,12 @@ def get_lifetime_stats(
         for doc in sessions_query:
             session_data = doc.to_dict()
             
-            # Only process stopped sessions
+            # Only process stopped sessions with completed analysis
             if session_data.get('status') != 'STOPPED':
+                continue
+            
+            # Only include sessions with completed analysis (classification data exists)
+            if session_data.get('analysisStatus') != 'COMPLETED':
                 continue
             
             # Get startedAt timestamp
@@ -553,15 +580,19 @@ def get_lifetime_stats(
             sessions_by_month[month_key]["days"].add(date_key)
             
             # Extract category data from AI classification
+            # IMPORTANT: Include ALL sessions with classification data, even if scores are low
+            # Any session with at least one category detected should be included in stats
             classification = session_data.get('classification', {})
-            if classification and isinstance(classification, dict):
+            if classification and isinstance(classification, dict) and len(classification) > 0:
                 # Map classification labels to our category names
-                gossip_score = classification.get('gossip', 0.0)
-                unethical_score = classification.get('insult or unethical speech', 0.0)
-                waste_score = classification.get('wasteful talk', 0.0)
-                productive_score = classification.get('productive or meaningful speech', 0.0)
+                # Ensure scores are floats (handle string conversion if needed)
+                gossip_score = float(classification.get('gossip', 0.0) or 0.0)
+                unethical_score = float(classification.get('insult or unethical speech', 0.0) or 0.0)
+                waste_score = float(classification.get('wasteful talk', 0.0) or 0.0)
+                productive_score = float(classification.get('productive or meaningful speech', 0.0) or 0.0)
                 
                 # Add scores to category totals (weighted by session duration in minutes)
+                # Even if scores are low, they contribute to the distribution
                 category_totals["gossip"] += gossip_score * total_minutes
                 category_totals["unethical"] += unethical_score * total_minutes
                 category_totals["waste"] += waste_score * total_minutes
@@ -622,6 +653,7 @@ def get_lifetime_stats(
             )
         
         print(f"[STATS] Lifetime stats for user {uid}: {total_sessions} sessions, {total_listening_minutes:.2f} minutes, {active_days} active days")
+        print(f"[STATS] Category totals: gossip={category_totals['gossip']:.2f}, unethical={category_totals['unethical']:.2f}, waste={category_totals['waste']:.2f}, productive={category_totals['productive']:.2f}")
         
         return LifetimeStatsResponse(
             total_sessions=total_sessions,
