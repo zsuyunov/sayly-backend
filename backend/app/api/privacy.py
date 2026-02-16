@@ -24,7 +24,7 @@ def get_firestore_db():
 
 
 @router.get(
-    "/",
+    "",
     response_model=PrivacyConsentResponse,
     summary="Get privacy and consent preferences",
     description="Returns the current user's privacy and consent preferences. Returns default values if no record exists.",
@@ -121,7 +121,7 @@ def get_privacy_consent(
 
 
 @router.put(
-    "/",
+    "",
     response_model=PrivacyConsentResponse,
     summary="Update privacy and consent preferences",
     description="Updates the current user's privacy and consent preferences. Overwrites existing record.",

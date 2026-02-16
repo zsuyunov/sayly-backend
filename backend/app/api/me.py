@@ -21,7 +21,7 @@ def get_firestore_db():
 
 
 @router.get(
-    "/",
+    "",
     summary="Get current user profile",
     description="Returns the current authenticated user's profile including nickname and email verification status from Firestore.",
     responses={
