@@ -5,7 +5,7 @@ from collections import defaultdict
 
 from app.auth.dependencies import get_current_user
 from app.models.report import WeeklyReportResponse, MonthlyReportResponse
-from app.models.progress import ProgressReportResponse, ChartDataResponse, ChartDataPoint
+from app.models.progress import ProgressReportResponse, ChartDataResponse, ChartDataPoint, CategoryDistribution
 from firebase_admin import firestore
 
 router = APIRouter(
@@ -398,11 +398,23 @@ def get_progress_report(
         total_listening_seconds = 0
         earliest_session = None
         
+        # Category totals for distribution calculation
+        category_totals = {
+            "gossip": 0,
+            "unethical": 0,
+            "waste": 0,
+            "productive": 0,
+        }
+        
         for doc in sessions_query:
             session_data = doc.to_dict()
             
-            # Only process stopped sessions
+            # Only process stopped sessions with completed analysis
             if session_data.get('status') != 'STOPPED':
+                continue
+            
+            # Only include sessions with completed analysis (classification data exists)
+            if session_data.get('analysisStatus') != 'COMPLETED':
                 continue
             
             # Get startedAt timestamp
@@ -436,10 +448,29 @@ def get_progress_report(
             
             # Extract statistics
             total_seconds = totals.get('totalSeconds', 0)
+            total_minutes = total_seconds / 60.0
             
             # Aggregate
             total_sessions += 1
             total_listening_seconds += total_seconds
+            
+            # Extract category data from AI classification
+            # IMPORTANT: Include ALL sessions with classification data, even if scores are low
+            classification = session_data.get('classification', {})
+            if classification and isinstance(classification, dict) and len(classification) > 0:
+                # Map classification labels to our category names
+                # Ensure scores are floats (handle string conversion if needed)
+                gossip_score = float(classification.get('gossip', 0.0) or 0.0)
+                unethical_score = float(classification.get('insult or unethical speech', 0.0) or 0.0)
+                waste_score = float(classification.get('wasteful talk', 0.0) or 0.0)
+                productive_score = float(classification.get('productive or meaningful speech', 0.0) or 0.0)
+                
+                # Add scores to category totals (weighted by session duration in minutes)
+                # Even if scores are low, they contribute to the distribution
+                category_totals["gossip"] += gossip_score * total_minutes
+                category_totals["unethical"] += unethical_score * total_minutes
+                category_totals["waste"] += waste_score * total_minutes
+                category_totals["productive"] += productive_score * total_minutes
         
         # For lifetime, set period_start to earliest session or account creation
         if period == "lifetime":
@@ -452,10 +483,24 @@ def get_progress_report(
         # Convert seconds to minutes and round
         total_listening_minutes = round(total_listening_seconds / 60.0)
         
+        # Calculate category distribution percentages
+        total_category = sum(category_totals.values())
+        if total_category > 0:
+            category_distribution = CategoryDistribution(
+                gossip=round((category_totals["gossip"] / total_category) * 100, 1),
+                unethical=round((category_totals["unethical"] / total_category) * 100, 1),
+                waste=round((category_totals["waste"] / total_category) * 100, 1),
+                productive=round((category_totals["productive"] / total_category) * 100, 1),
+            )
+        else:
+            category_distribution = None
+        
         # Format date context
         date_context = format_date_context(period, period_start, period_end)
         
         print(f"[REPORTS] {period.capitalize()} progress for user {uid}: {total_sessions} sessions, {total_listening_minutes} minutes")
+        if category_distribution:
+            print(f"[REPORTS] Category distribution: gossip={category_distribution.gossip}%, unethical={category_distribution.unethical}%, waste={category_distribution.waste}%, productive={category_distribution.productive}%")
         
         return ProgressReportResponse(
             period=period,
@@ -464,6 +509,7 @@ def get_progress_report(
             totalListeningMinutes=float(total_listening_minutes),
             periodStart=period_start,
             periodEnd=period_end,
+            categoryDistribution=category_distribution,
         )
         
     except HTTPException:

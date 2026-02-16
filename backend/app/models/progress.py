@@ -1,6 +1,14 @@
-from typing import List, Literal
+from typing import List, Literal, Optional
 from pydantic import BaseModel, Field
 from datetime import datetime
+
+
+class CategoryDistribution(BaseModel):
+    """Category distribution percentages."""
+    gossip: float = Field(..., description="Gossip percentage")
+    unethical: float = Field(..., description="Unethical speech percentage")
+    waste: float = Field(..., description="Wasteful talk percentage")
+    productive: float = Field(..., description="Productive speech percentage")
 
 
 class ProgressReportResponse(BaseModel):
@@ -11,6 +19,7 @@ class ProgressReportResponse(BaseModel):
     totalListeningMinutes: float = Field(..., description="Total listening time in minutes (rounded)")
     periodStart: datetime = Field(..., description="Start of the reporting period")
     periodEnd: datetime = Field(..., description="End of the reporting period (usually now)")
+    categoryDistribution: Optional[CategoryDistribution] = Field(None, description="Speech category distribution percentages")
 
 
 class ChartDataPoint(BaseModel):
