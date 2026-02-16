@@ -102,9 +102,8 @@ def get_weekly_stats(
             if session_data.get('status') != 'STOPPED':
                 continue
             
-            # Only include sessions with completed analysis (classification data exists)
-            if session_data.get('analysisStatus') != 'COMPLETED':
-                continue
+            # NOTE: We count ALL STOPPED sessions for totals/minutes.
+            # Category distribution is computed only when `classification` is present.
             
             # Get startedAt timestamp
             started_at = session_data.get('startedAt')
@@ -316,9 +315,8 @@ def get_monthly_stats(
             if session_data.get('status') != 'STOPPED':
                 continue
             
-            # Only include sessions with completed analysis (classification data exists)
-            if session_data.get('analysisStatus') != 'COMPLETED':
-                continue
+            # NOTE: We count ALL STOPPED sessions for totals/minutes.
+            # Category distribution is computed only when `classification` is present.
             
             # Get startedAt timestamp
             started_at = session_data.get('startedAt')
@@ -532,9 +530,8 @@ def get_lifetime_stats(
             if session_data.get('status') != 'STOPPED':
                 continue
             
-            # Only include sessions with completed analysis (classification data exists)
-            if session_data.get('analysisStatus') != 'COMPLETED':
-                continue
+            # NOTE: We count ALL STOPPED sessions for totals/minutes.
+            # Category distribution is computed only when `classification` is present.
             
             # Get startedAt timestamp
             started_at = session_data.get('startedAt')

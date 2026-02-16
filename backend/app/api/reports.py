@@ -396,6 +396,8 @@ def get_progress_report(
         # Aggregate statistics
         total_sessions = 0
         total_listening_seconds = 0
+        total_flagged = 0
+        total_positive = 0
         earliest_session = None
         
         # Category totals for distribution calculation
@@ -413,9 +415,8 @@ def get_progress_report(
             if session_data.get('status') != 'STOPPED':
                 continue
             
-            # Only include sessions with completed analysis (classification data exists)
-            if session_data.get('analysisStatus') != 'COMPLETED':
-                continue
+            # NOTE: We count ALL STOPPED sessions for totals/minutes.
+            # Category distribution is computed only when `classification` is present.
             
             # Get startedAt timestamp
             started_at = session_data.get('startedAt')
@@ -448,11 +449,15 @@ def get_progress_report(
             
             # Extract statistics
             total_seconds = totals.get('totalSeconds', 0)
+            flagged_count = totals.get('flaggedCount', 0)
+            positive_count = totals.get('positiveCount', 0)
             total_minutes = total_seconds / 60.0
             
             # Aggregate
             total_sessions += 1
             total_listening_seconds += total_seconds
+            total_flagged += int(flagged_count or 0)
+            total_positive += int(positive_count or 0)
             
             # Extract category data from AI classification
             # IMPORTANT: Include ALL sessions with classification data, even if scores are low
@@ -482,6 +487,9 @@ def get_progress_report(
         
         # Convert seconds to minutes and round
         total_listening_minutes = round(total_listening_seconds / 60.0)
+
+        # Average minutes per session
+        average_minutes_per_session = (total_listening_seconds / 60.0) / total_sessions if total_sessions > 0 else 0.0
         
         # Calculate category distribution percentages
         total_category = sum(category_totals.values())
@@ -507,6 +515,9 @@ def get_progress_report(
             dateContext=date_context,
             totalSessions=total_sessions,
             totalListeningMinutes=float(total_listening_minutes),
+            totalFlagged=total_flagged,
+            totalPositive=total_positive,
+            averageMinutesPerSession=round(average_minutes_per_session, 2),
             periodStart=period_start,
             periodEnd=period_end,
             categoryDistribution=category_distribution,

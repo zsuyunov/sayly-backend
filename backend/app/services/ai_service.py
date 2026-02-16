@@ -43,22 +43,22 @@ def analyze_speech(text: str) -> Dict[str, Any]:
         labels = result.get("labels", [])
         scores = result.get("scores", [])
         
-        # Extract clean category names (remove descriptions after colon)
+        # Normalize labels to our standard category keys.
+        # NOTE: classification_service is expected to return short/stable labels,
+        # but we keep substring-based fallback for robustness.
         clean_labels = []
         for label in labels:
-            # Extract category name before colon
-            category = label.split(":")[0].strip()
-            # Map to our standard category names
-            if "gossip" in category.lower():
+            ll = str(label).lower()
+            if "gossip" in ll:
                 clean_labels.append("gossip")
-            elif "insult" in category.lower() or "unethical" in category.lower():
+            elif "insult" in ll or "unethical" in ll:
                 clean_labels.append("insult or unethical speech")
-            elif "wasteful" in category.lower() or "waste" in category.lower():
+            elif "wasteful" in ll or "waste" in ll:
                 clean_labels.append("wasteful talk")
-            elif "productive" in category.lower() or "meaningful" in category.lower():
+            elif "productive" in ll or "meaningful" in ll:
                 clean_labels.append("productive or meaningful speech")
             else:
-                clean_labels.append(category)
+                clean_labels.append(str(label))
         
         # Create a mapping of clean label to score
         classification = dict(zip(clean_labels, scores))

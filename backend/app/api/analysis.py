@@ -569,10 +569,24 @@ async def process_analysis(
             }
         
         if analysis_status == 'COMPLETED':
-            return {
-                "success": True,
-                "message": "Analysis already completed"
+            # Allow re-processing if legacy/invalid classification exists (e.g. older prompt formats)
+            classification = session_data.get("classification", {})
+            required_keys = {
+                "gossip",
+                "insult or unethical speech",
+                "wasteful talk",
+                "productive or meaningful speech",
             }
+            has_valid_classification = (
+                isinstance(classification, dict)
+                and any(k in classification for k in required_keys)
+            )
+            if has_valid_classification:
+                return {
+                    "success": True,
+                    "message": "Analysis already completed"
+                }
+            print(f"[ANALYSIS] Re-processing allowed for session {session_id}: missing/invalid classification keys")
         
         # Check privacy preferences
         privacy_prefs = get_user_privacy_preferences(uid, db)

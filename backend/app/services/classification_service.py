@@ -3,7 +3,7 @@ import re
 import requests
 import logging
 import time
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -14,21 +14,57 @@ MAX_RETRIES = 3
 RETRY_DELAY = 2  # seconds
 
 # ============================================================================
-# STRICT CLASSIFICATION PROMPTS (used as candidate_labels for zero-shot)
-# 
-# CRITICAL INSTRUCTION: The model MUST use its semantic understanding and
-# contextual knowledge FIRST. Keywords are only secondary helpers, not the
-# primary classification method. The model should analyze meaning, intent,
-# context, and semantic relationships - NOT just match keywords.
+# ZERO-SHOT LABELS (MUST stay short + stable)
+#
+# IMPORTANT:
+# - Hugging Face zero-shot returns the *candidate label strings* back as `labels`.
+# - Downstream code (stats aggregation, Firestore storage) expects these exact keys.
+# - Therefore candidate labels must be short, stable category names (NOT long prompts).
+#
+# We put the "professional prompt" + keyword hints into the *inputs* (premise),
+# so the model still sees the instructions, while labels remain clean.
 # ============================================================================
 
-# Short label names mapped to the full labels (for clean output)
-LABEL_SHORT_NAMES = {
-    0: "gossip",
-    1: "insult or unethical speech",
-    2: "wasteful talk",
-    3: "productive or meaningful speech"
-}
+CATEGORY_LABELS: List[str] = [
+    "gossip",
+    "insult or unethical speech",
+    "wasteful talk",
+    "productive or meaningful speech",
+]
+
+CLASSIFICATION_INSTRUCTIONS = """You are a strict speech classifier for self-improvement analytics.
+
+You MUST follow this workflow:
+1) PRIMARY: Use semantic understanding and context FIRST (meaning, intent, tone, purpose). Do NOT rely on keywords.
+2) SECONDARY: Use keyword hints only as small helpers AFTER you decide from meaning/context.
+
+Label definitions:
+- gossip: talking about absent people, private lives, rumors, unverified claims about others.
+- insult or unethical speech: insults, threats, bullying, hate/discrimination, toxic/harmful intent.
+- wasteful talk: aimless filler, low-value rambling with no clear purpose.
+- productive or meaningful speech: learning, planning, problem-solving, constructive work or advice.
+
+If multiple categories appear, choose the single BEST overall label for the speech."""
+
+
+def _build_model_input(text: str, kw_matched: Optional[Dict[str, List[str]]] = None) -> str:
+    """Build the premise text sent to the zero-shot model (instructions + speech + keyword hints)."""
+    hints = kw_matched or {}
+    # Keep hints short; they are helpers only.
+    gossip_hints = ", ".join(hints.get("gossip", [])[:8])
+    unethical_hints = ", ".join(hints.get("unethical", [])[:8])
+    wasteful_hints = ", ".join(hints.get("wasteful", [])[:8])
+    productive_hints = ", ".join(hints.get("productive", [])[:8])
+
+    return (
+        f"{CLASSIFICATION_INSTRUCTIONS}\n\n"
+        f"SPEECH:\n{text.strip()}\n\n"
+        f"KEYWORD HINTS (secondary helpers only; ignore if they contradict meaning):\n"
+        f"- gossip hints: {gossip_hints or 'none'}\n"
+        f"- unethical hints: {unethical_hints or 'none'}\n"
+        f"- wasteful hints: {wasteful_hints or 'none'}\n"
+        f"- productive hints: {productive_hints or 'none'}\n"
+    )
 
 # ============================================================================
 # COMPREHENSIVE KEYWORD DICTIONARIES (SECONDARY HELPERS ONLY)
@@ -403,66 +439,10 @@ WASTEFUL_KEYWORDS = {
 }
 
 
-def _build_classification_labels_with_keywords() -> List[str]:
-    """
-    Build classification labels that include explicit instructions and keyword lists.
-    These are sent directly to the AI model as prompts.
-    """
-    # Format keywords as comma-separated lists (limit to reasonable length for API)
-    gossip_keywords_str = ", ".join(list(GOSSIP_KEYWORDS)[:100])  # First 100 keywords
-    unethical_keywords_str = ", ".join(list(UNETHICAL_KEYWORDS)[:100])
-    wasteful_keywords_str = ", ".join(list(WASTEFUL_KEYWORDS)[:100])
-    productive_keywords_str = ", ".join(list(PRODUCTIVE_KEYWORDS)[:150])  # More for productive
-    
-    return [
-        # GOSSIP: Talking about absent people, their private lives, spreading rumors
-        f"""CRITICAL INSTRUCTION FOR AI MODEL: You MUST use your semantic understanding and contextual knowledge FIRST as the PRIMARY classification method. Keywords are ONLY secondary helpers. Do NOT rely on keyword matching alone.
-
-CLASSIFICATION TASK: Determine if this speech is gossip. This speech is gossip if it discusses other people behind their backs, spreads rumors, talks about someone's private life, personal affairs, relationships, or shares unverified information about absent individuals.
-
-WORKFLOW:
-1. PRIMARY STEP: Use your semantic understanding to analyze the full meaning, intent, and context of the speech. Ask yourself: Is the speaker talking about absent people's private matters? Is there malicious intent or spreading of unverified information? Analyze the overall context and meaning, not individual words.
-2. SECONDARY STEP: Only AFTER semantic analysis, you may use these keywords as helpers: {gossip_keywords_str}
-
-REMEMBER: Semantic understanding is PRIMARY. Keywords are SECONDARY helpers only. If the semantic meaning indicates gossip but keywords are absent, still classify as gossip. If keywords are present but semantic meaning is NOT gossip, do NOT classify as gossip.""",
-
-        # INSULT / UNETHICAL: Offensive, harmful, discriminatory, abusive language
-        f"""CRITICAL INSTRUCTION FOR AI MODEL: You MUST use your semantic understanding and contextual knowledge FIRST as the PRIMARY classification method. Keywords are ONLY secondary helpers. Do NOT rely on keyword matching alone.
-
-CLASSIFICATION TASK: Determine if this speech contains insults, offensive language, verbal abuse, hate speech, threats, bullying, discrimination, profanity, cursing, or ethically harmful and toxic statements.
-
-WORKFLOW:
-1. PRIMARY STEP: Use your semantic understanding to analyze the full meaning, intent, tone, and context of the speech. Ask yourself: Does the speech have harmful intent? Is the tone offensive? Is the message discriminatory or abusive? Analyze the overall meaning and context, not individual words. Even if profanity is absent, if the semantic meaning is harmful, classify accordingly.
-2. SECONDARY STEP: Only AFTER semantic analysis, you may use these keywords as helpers: {unethical_keywords_str}
-
-REMEMBER: Semantic understanding is PRIMARY. Keywords are SECONDARY helpers only. If the semantic meaning indicates harmful/unethical content but keywords are absent, still classify as unethical. If keywords are present but semantic meaning is NOT harmful, do NOT classify as unethical.""",
-
-        # WASTEFUL: Aimless, repetitive, no-purpose chatter
-        f"""CRITICAL INSTRUCTION FOR AI MODEL: You MUST use your semantic understanding and contextual knowledge FIRST as the PRIMARY classification method. Keywords are ONLY secondary helpers. Do NOT rely on keyword matching alone.
-
-CLASSIFICATION TASK: Determine if this speech is wasteful - idle small talk with no real purpose, aimless rambling, repetitive meaningless chatter, time-wasting conversation, or trivial banter about nothing important.
-
-WORKFLOW:
-1. PRIMARY STEP: Use your semantic understanding to analyze the full meaning, purpose, and value of the speech. Ask yourself: Does the speech have a clear purpose? Is there meaningful substance? Is it genuinely aimless or just casual conversation? Analyze the overall meaning and value, not individual words. Casual conversation with purpose is NOT wasteful.
-2. SECONDARY STEP: Only AFTER semantic analysis, you may use these keywords as helpers: {wasteful_keywords_str}
-
-REMEMBER: Semantic understanding is PRIMARY. Keywords are SECONDARY helpers only. If the semantic meaning indicates wasteful talk but keywords are absent, still classify as wasteful. If keywords are present but semantic meaning has purpose, do NOT classify as wasteful.""",
-
-        # PRODUCTIVE: Educational, professional, constructive, goal-oriented
-        f"""CRITICAL INSTRUCTION FOR AI MODEL: You MUST use your semantic understanding and contextual knowledge FIRST as the PRIMARY classification method. Keywords are ONLY secondary helpers. Do NOT rely on keyword matching alone.
-
-CLASSIFICATION TASK: Determine if this speech is productive and meaningful - involving education, learning, teaching, professional work discussion, problem-solving, technical explanation, sharing knowledge, planning, constructive feedback, or goal-oriented dialogue.
-
-WORKFLOW:
-1. PRIMARY STEP: Use your semantic understanding to analyze the full meaning, value, and purpose of the speech. Ask yourself: Does the speech have educational value? Is it constructive? Does it involve problem-solving or knowledge sharing? Analyze the overall meaning and value, not individual words. Even without technical terms, if the semantic meaning is productive, classify accordingly.
-2. SECONDARY STEP: Only AFTER semantic analysis, you may use these keywords as helpers: {productive_keywords_str}
-
-REMEMBER: Semantic understanding is PRIMARY. Keywords are SECONDARY helpers only. If the semantic meaning indicates productive speech but keywords are absent, still classify as productive. If keywords are present but semantic meaning is NOT productive, do NOT classify as productive."""
-    ]
-
-
-# Build classification labels dynamically with keywords included
-CLASSIFICATION_LABELS = _build_classification_labels_with_keywords()
+### NOTE:
+# We intentionally do NOT send the full keyword dictionaries to the model.
+# That would bloat requests and can reduce accuracy. Instead we send only
+# a small set of *matched* keyword hints per input (secondary helpers).
 
 
 class HuggingFaceClassificationService:
@@ -671,7 +651,7 @@ class HuggingFaceClassificationService:
         print(f"[CLASSIFICATION] PRIMARY: Using AI model's semantic understanding and contextual knowledge")
         print(f"[CLASSIFICATION] SECONDARY: Keywords will provide minimal boosts only (max 0.08-0.10)")
 
-        # ---- Keyword analysis (SECONDARY - only for small boosts) ----
+        # ---- Keyword analysis (SECONDARY - only for small boosts + small hint list to the model) ----
         kw = self._detect_keywords(text)
         print(f"[CLASSIFICATION] Keyword hits (for reference only): productive={kw['counts']['productive']}, "
               f"gossip={kw['counts']['gossip']}, unethical={kw['counts']['unethical']}, "
@@ -688,12 +668,16 @@ class HuggingFaceClassificationService:
         boosts = kw["boosts"]
 
         # ---- Build API payload ----
-        # The model will use its semantic understanding FIRST based on the strict prompts
+        # The model will use its semantic understanding FIRST based on the strict instructions in the input.
+        # Candidate labels must remain short/stable so downstream storage keys match.
+        model_input = _build_model_input(text, kw.get("matched"))
         payload = {
-            "inputs": text,
+            "inputs": model_input,
             "parameters": {
-                "candidate_labels": CLASSIFICATION_LABELS,
+                "candidate_labels": CATEGORY_LABELS,
                 "multi_label": False,
+                # Keep hypothesis simple; the heavy instructions live in the premise (inputs).
+                "hypothesis_template": "The best category for this speech is {}.",
             }
         }
 
@@ -788,27 +772,10 @@ class HuggingFaceClassificationService:
                 result = {"labels": labels, "scores": scores}
 
                 # ---- Log results ----
-                clean = [LABEL_SHORT_NAMES.get(i, labels[i].split(":")[0].strip())
-                         for i in range(len(labels))]
-                # Rebuild clean list based on actual label content
-                clean_labels = []
-                for label in labels:
-                    ll = label.lower()
-                    if "gossip" in ll:
-                        clean_labels.append("gossip")
-                    elif "insult" in ll or "unethical" in ll:
-                        clean_labels.append("insult or unethical speech")
-                    elif "wasteful" in ll or "idle" in ll or "aimless" in ll:
-                        clean_labels.append("wasteful talk")
-                    elif "productive" in ll or "meaningful" in ll:
-                        clean_labels.append("productive or meaningful speech")
-                    else:
-                        clean_labels.append(label[:40])
-
-                top_clean = clean_labels[0] if clean_labels else "unknown"
+                top_clean = labels[0] if labels else "unknown"
                 print(f"[CLASSIFICATION] Classification successful!")
                 print(f"[CLASSIFICATION] Top category: {top_clean} (confidence: {scores[0]:.3f})")
-                print(f"[CLASSIFICATION] All scores: {dict(zip(clean_labels, [f'{s:.3f}' for s in scores]))}")
+                print(f"[CLASSIFICATION] All scores: {dict(zip(labels, [f'{s:.3f}' for s in scores]))}")
 
                 return result
 
