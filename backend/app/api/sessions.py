@@ -479,7 +479,7 @@ def get_last_session(
 
 
 @router.get(
-    "/",
+    "",
     response_model=SessionsListResponse,
     summary="List all sessions",
     description="Returns all listening sessions for the current user, sorted by startedAt descending (latest first).",
