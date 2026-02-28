@@ -1,6 +1,7 @@
 from typing import Dict, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File, Form
 from datetime import datetime, timezone
+import mimetypes
 import os
 import uuid
 import aiofiles
@@ -35,6 +36,18 @@ ALLOWED_MIME_TYPES = [
 
 # Preferred MIME type for AI processing
 PREFERRED_MIME_TYPE = "audio/wav"
+
+# Extension -> allowed MIME (for when client sends wrong/missing Content-Type, e.g. iOS/RN)
+EXTENSION_TO_MIME = {
+    ".wav": "audio/wav",
+    ".wave": "audio/wave",
+    ".mp3": "audio/mpeg",
+    ".mpeg": "audio/mpeg",
+    ".aac": "audio/aac",
+    ".m4a": "audio/m4a",
+    ".ogg": "audio/ogg",
+    ".webm": "audio/webm",
+}
 
 # Directory to store uploaded audio files
 AUDIO_STORAGE_DIR = os.getenv("AUDIO_STORAGE_DIR", "./audio_storage")
@@ -174,17 +187,25 @@ async def upload_audio(
                 detail="You do not have permission to upload audio for this session"
             )
         
-        # Validate file type
-        if file.content_type not in ALLOWED_MIME_TYPES:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid file type. Allowed types: {', '.join(ALLOWED_MIME_TYPES)}"
-            )
+        # Validate file type (client may send wrong/missing Content-Type, e.g. iOS/React Native)
+        content_type = file.content_type
+        if content_type not in ALLOWED_MIME_TYPES:
+            inferred = None
+            if file.filename:
+                ext = os.path.splitext(file.filename)[1].lower()
+                inferred = EXTENSION_TO_MIME.get(ext) or (mimetypes.guess_type(file.filename)[0] or "").lower()
+            if inferred and inferred in ALLOWED_MIME_TYPES:
+                content_type = inferred
+            else:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Invalid file type. Allowed types: {', '.join(ALLOWED_MIME_TYPES)}"
+                )
         
         # Warn if non-WAV format (for AI compatibility)
-        is_wav = file.content_type in ["audio/wav", "audio/wave", "audio/x-wav"]
+        is_wav = content_type in ["audio/wav", "audio/wave", "audio/x-wav"]
         if not is_wav:
-            print(f"[AUDIO] Warning: Non-WAV format uploaded ({file.content_type}). AI processing may require conversion.")
+            print(f"[AUDIO] Warning: Non-WAV format uploaded ({content_type}). AI processing may require conversion.")
         
         # Read file content to check size
         file_content = await file.read()
