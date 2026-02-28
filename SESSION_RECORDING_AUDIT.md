@@ -128,6 +128,7 @@ The session recording feature is **functionally complete** with solid authentica
   - Implement exponential backoff retry (3 attempts)
   - Store failed uploads in AsyncStorage for retry on app restart
   - Add "Retry Upload" button in UI
+- **403/404 and the retry queue:** When the upload queue retries and gets **403** (forbidden) or **404** (session not found), the backend will not accept the upload on retry. The client should **remove that session from the failed-upload queue** (do not retry again). The API sends `X-Upload-Retry: false` on 403 and uses 404 for invalid/missing sessions so the app can treat these as permanent failures and clear them from the queue.
 
 #### **HIGH: No Orphan Audio File Cleanup**
 - **Issue:** If upload fails, local audio file remains on device indefinitely

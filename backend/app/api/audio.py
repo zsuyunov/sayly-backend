@@ -180,11 +180,18 @@ async def upload_audio(
                 detail="Session not found"
             )
         
-        session_data = session_doc.to_dict()
-        if session_data.get('uid') != uid:
+        session_data = session_doc.to_dict() or {}
+        session_uid = session_data.get("uid")
+        # Invalid/legacy session with no owner -> 404 so clients can drop from retry queue
+        if session_uid is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Session not found or invalid"
+            )
+        if session_uid != uid:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="You do not have permission to upload audio for this session"
+                detail="You do not have permission to upload audio for this session. Do not retry."
             )
         
         # Validate file type (client may send wrong/missing Content-Type, e.g. iOS/React Native)

@@ -1,5 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from starlette.exceptions import HTTPException as StarletteHTTPException
 from dotenv import load_dotenv
 import os
 import requests
@@ -47,6 +49,18 @@ app.include_router(audio_router, prefix="/api")
 app.include_router(analysis_router, prefix="/api")
 app.include_router(notes_router, prefix="/api")
 app.include_router(stats_router, prefix="/api")
+
+
+@app.exception_handler(StarletteHTTPException)
+async def http_exception_handler(request, exc: StarletteHTTPException):
+    """Add X-Upload-Retry: false on 403 so clients stop retrying forbidden uploads."""
+    if exc.status_code == 403:
+        return JSONResponse(
+            status_code=403,
+            content={"detail": exc.detail},
+            headers={"X-Upload-Retry": "false"},
+        )
+    return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
 
 @app.get(
